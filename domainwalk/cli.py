@@ -80,6 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json", action="store_true", help="salida JSON")
     parser.add_argument("-o", "--output", help="escribe el JSON en un archivo")
     parser.add_argument("--diff", metavar="INFORME.json", help="compara esta ejecución con un informe anterior")
+    parser.add_argument("--diff-output", metavar="DIFF.json", help="escribe el resultado de la comparación en un archivo")
     parser.add_argument("--timeout", type=float, default=None, help="timeout en segundos (def. 8)")
     parser.add_argument("--config", help=f"ruta a la configuración (def. ./.domainwalk.toml)")
     parser.add_argument("--no-config", action="store_true", help="ignora cualquier configuración")
@@ -126,17 +127,28 @@ def main(argv: list[str] | None = None) -> int:
 
     delta = diff_reports(previous, report) if previous else None
 
-    payload = json.dumps({"report": report, "diff": delta} if delta else report, ensure_ascii=False, indent=2)
-    if args.output:
+    def dump(path: str, data: dict) -> bool:
         try:
-            with open(args.output, "w", encoding="utf-8") as fh:
-                fh.write(payload + "\n")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+            return True
         except OSError as exc:
-            print(f"error: no se pudo escribir {args.output}: {exc}", file=sys.stderr)
+            print(f"error: no se pudo escribir {path}: {exc}", file=sys.stderr)
+            return False
+
+    # -o guarda el informe a secas, nunca el informe envuelto con su diff: así el
+    # archivo de hoy sirve de línea base para la comparación de mañana.
+    if args.output and not dump(args.output, report):
+        return EXIT_ERROR
+    if args.diff_output:
+        if delta is None:
+            print("error: --diff-output requiere --diff", file=sys.stderr)
+            return EXIT_ERROR
+        if not dump(args.diff_output, delta):
             return EXIT_ERROR
 
     if args.json:
-        print(payload)
+        print(json.dumps({"report": report, "diff": delta} if delta else report, ensure_ascii=False, indent=2))
     else:
         print_report(report)
         if delta:

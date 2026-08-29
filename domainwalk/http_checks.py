@@ -96,8 +96,8 @@ def _peer_cert(host: str, port: int, timeout: float, verify: bool) -> tuple[dict
             return cert, ssock.version(), ssock.cipher()
 
 
-def _not_after(cert: dict) -> datetime | None:
-    raw = cert.get("notAfter")
+def _cert_time(cert: dict, key: str) -> datetime | None:
+    raw = cert.get(key)
     if not raw:
         return None
     try:
@@ -105,6 +105,20 @@ def _not_after(cert: dict) -> datetime | None:
         return datetime.fromtimestamp(ssl.cert_time_to_seconds(raw), timezone.utc)
     except ValueError:
         return None
+
+
+def expiry_thresholds(lifetime_days: int | None) -> tuple[int, int]:
+    """Devuelve (fail_at, warn_at) en días, en proporción a la vida del certificado.
+
+    Un umbral fijo de 45 días marca en amarillo cualquier certificado ACME de 90
+    días sano, porque su renovación normal pasa por ahí cada ciclo. Se escala con
+    la duración y se limita a los valores clásicos para certificados anuales.
+    """
+    if not lifetime_days or lifetime_days <= 0:
+        return 21, 45
+    fail_at = min(21, max(3, round(lifetime_days * 0.07)))
+    warn_at = min(45, max(7, round(lifetime_days * 0.15)))
+    return fail_at, max(warn_at, fail_at + 1)
 
 
 def host_matches(host: str, patterns: list[str]) -> bool:
@@ -153,16 +167,21 @@ def collect_tls(host: str, timeout: float, port: int = 443) -> dict:
 
     subject = dict(x[0] for x in cert.get("subject", ()))
     issuer = dict(x[0] for x in cert.get("issuer", ()))
-    expires = _not_after(cert)
+    expires = _cert_time(cert, "notAfter")
+    starts = _cert_time(cert, "notBefore")
     days = (expires - datetime.now(timezone.utc)).days if expires else None
+    lifetime = (expires - starts).days if expires and starts else None
+    fail_at, warn_at = expiry_thresholds(lifetime)
     sans = sorted(ext[1] for ext in cert.get("subjectAltName", ()) if ext[0] == "DNS")
 
     info.update(
         {
             "subject_cn": subject.get("commonName"),
             "issuer": issuer.get("organizationName") or issuer.get("commonName"),
+            "not_before": starts.isoformat() if starts else None,
             "not_after": expires.isoformat() if expires else None,
             "days_left": days,
+            "lifetime_days": lifetime,
             "san": sans,
         }
     )
@@ -172,12 +191,13 @@ def collect_tls(host: str, timeout: float, port: int = 443) -> dict:
         findings.append(finding("fail", "tls.expiry", "No se leyó la caducidad"))
     elif days < 0:
         findings.append(finding("fail", "tls.expiry", f"Caducado hace {-days} días ({info['not_after']})", renew))
-    elif days < 21:
-        findings.append(finding("fail", "tls.expiry", f"Caduca en {days} días", renew))
-    elif days < 45:
-        findings.append(finding("warn", "tls.expiry", f"Caduca en {days} días", renew))
+    elif days < fail_at:
+        findings.append(finding("fail", "tls.expiry", f"Caduca en {days} días (umbral {fail_at})", renew))
+    elif days < warn_at:
+        findings.append(finding("warn", "tls.expiry", f"Caduca en {days} días (umbral {warn_at})", renew))
     else:
-        findings.append(finding("ok", "tls.expiry", f"Caduca en {days} días ({info['not_after']})"))
+        suffix = f" · vida {lifetime}d" if lifetime else ""
+        findings.append(finding("ok", "tls.expiry", f"Caduca en {days} días ({info['not_after']}){suffix}"))
 
     if sans:
         covers_host = host_matches(host, sans)

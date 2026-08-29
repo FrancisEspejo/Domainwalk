@@ -9,7 +9,7 @@ from domainwalk.config import Config, apply_mutes, load_config, mute_reason
 from domainwalk.diff import diff_reports
 from domainwalk.dns_checks import _sorted_records
 from domainwalk.findings import finding, score, sort_findings
-from domainwalk.http_checks import host_matches
+from domainwalk.http_checks import expiry_thresholds, host_matches
 
 
 @pytest.mark.parametrize(
@@ -146,4 +146,54 @@ def test_record_reordering_is_not_a_diff():
     """El resolver rota el RRset; eso no es un cambio real."""
     old = _report([], a=["185.199.108.153", "185.199.111.153"])
     new = _report([], a=["185.199.111.153", "185.199.108.153"])
+    assert diff_reports(old, new)["records"] == {}
+
+
+@pytest.mark.parametrize(
+    "lifetime,days_left,expected",
+    [
+        # Certificado ACME de 90 días: 38 días restantes es una renovación sana,
+        # no un aviso. Con el umbral fijo de 45 esto salía en amarillo siempre.
+        (90, 38, "ok"),
+        (90, 12, "warn"),
+        (90, 5, "fail"),
+        # Certificado anual: se mantienen los umbrales clásicos.
+        (398, 60, "ok"),
+        (398, 30, "warn"),
+        (398, 15, "fail"),
+        # Certificado corto de 47 días.
+        (47, 20, "ok"),
+        (47, 5, "warn"),
+        (47, 2, "fail"),
+    ],
+)
+def test_expiry_thresholds_scale_with_lifetime(lifetime, days_left, expected):
+    fail_at, warn_at = expiry_thresholds(lifetime)
+    level = "fail" if days_left < fail_at else "warn" if days_left < warn_at else "ok"
+    assert level == expected
+
+
+def test_expiry_thresholds_fallback_without_lifetime():
+    assert expiry_thresholds(None) == (21, 45)
+    assert expiry_thresholds(0) == (21, 45)
+
+
+def test_expiry_thresholds_are_ordered():
+    for lifetime in (1, 7, 30, 47, 90, 180, 398, 825):
+        fail_at, warn_at = expiry_thresholds(lifetime)
+        assert 0 < fail_at < warn_at
+
+
+def test_hostnames_are_lowercased():
+    """FrancisRavn.github.io y francisravn.github.io son el mismo registro."""
+    assert _sorted_records("CNAME", ["FrancisRavn.github.io"]) == ["francisravn.github.io"]
+    assert _sorted_records("NS", ["NS1.Example.COM"]) == ["ns1.example.com"]
+
+
+def test_capitalization_change_is_not_a_diff():
+    old = _report([], www_cname=["FrancisRavn.github.io"])
+    new = _report([], www_cname=["francisravn.github.io"])
+    # El valor ya llega normalizado desde _sorted_records; el diff no debe verlo.
+    old["dns"]["www_cname"] = _sorted_records("CNAME", old["dns"]["www_cname"])
+    new["dns"]["www_cname"] = _sorted_records("CNAME", new["dns"]["www_cname"])
     assert diff_reports(old, new)["records"] == {}

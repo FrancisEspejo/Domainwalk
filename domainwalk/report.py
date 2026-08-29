@@ -10,6 +10,14 @@ LEVEL_STYLE = {"ok": "green", "warn": "yellow", "fail": "red", "info": "cyan"}
 LEVEL_MARK = {"ok": "OK", "warn": "WARN", "fail": "FAIL", "info": "INFO"}
 DIR_STYLE = {"worse": "red", "better": "green"}
 
+# Un CSP real puede pasar de 3.000 caracteres y sepultar el resto del informe.
+HEADER_LIMIT = 160
+
+
+def _short(value: str, limit: int = HEADER_LIMIT) -> str:
+    value = str(value)
+    return value if len(value) <= limit else value[: limit - 1].rstrip() + "…"
+
 
 def print_report(report: dict, console: Console | None = None) -> None:
     console = console or Console()
@@ -46,7 +54,7 @@ def print_report(report: dict, console: Console | None = None) -> None:
     if dns:
         console.print("\n[bold]DNS[/bold]")
         for label, key in (("A", "a"), ("AAAA", "aaaa"), ("MX", "mx"), ("NS", "ns"), ("CAA", "caa"), ("DS", "ds")):
-            console.print(f"  {label:<6} {', '.join(dns.get(key) or []) or '—'}")
+            console.print(f"  {label:<6} {_short(', '.join(dns.get(key) or []), 300) or '—'}")
 
     tls = report.get("tls", {})
     console.print("\n[bold]TLS[/bold]")
@@ -63,7 +71,7 @@ def print_report(report: dict, console: Console | None = None) -> None:
     else:
         console.print(f"  status {http.get('status', '—')}")
         for key, value in (http.get("headers") or {}).items():
-            console.print(f"  {key}: {value}")
+            console.print(f"  {key}: {_short(value)}")
     console.print()
 
 

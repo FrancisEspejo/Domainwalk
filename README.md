@@ -38,7 +38,12 @@ Un informe suelto es una foto. Lo interesante suele ser qué ha cambiado:
 ```bash
 domainwalk francisravn.com -o informes/$(date +%F).json
 domainwalk francisravn.com --diff informes/2026-08-01.json
+domainwalk francisravn.com --diff informes/2026-08-01.json --diff-output cambios.json
 ```
+
+`-o` guarda siempre el informe a secas, aunque uses `--diff` a la vez: así el
+archivo de hoy sirve de línea base para la comparación de mañana. El resultado
+de la comparación va a `--diff-output`, o a la salida estándar con `--json`.
 
 El diff señala hallazgos nuevos, hallazgos que ya no aparecen, cambios de nivel
 (marcando si mejoran o empeoran) y altas y bajas de registros DNS. La salida es
@@ -92,3 +97,6 @@ existe solo para eso — su clave privada no protege nada.
 - El chequeo del puerto 80 no sigue redirecciones, así que distingue "no
   contestó" de "redirigió bien pero el destino falla".
 - Las consultas DNS y los dos bloques de red van en paralelo.
+- El umbral de caducidad se escala con la duración del certificado. Con un
+  umbral fijo, cualquier certificado ACME de 90 días sano sale en amarillo la
+  mitad de su vida, porque su renovación normal pasa por esa ventana cada ciclo.

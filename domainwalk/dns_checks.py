@@ -42,7 +42,14 @@ def _resolver(timeout: float) -> dns.resolver.Resolver:
     return res
 
 
+# Los nombres de host no distinguen mayúsculas: si no se normalizan, un cambio
+# de capitalización del proveedor aparece como alta y baja de registro en el diff.
+CASE_INSENSITIVE = frozenset({"MX", "NS", "CNAME", "DS", "PTR"})
+
+
 def _sorted_records(rdtype: str, values: list[str]) -> list[str]:
+    if rdtype in CASE_INSENSITIVE:
+        values = [v.lower() for v in values]
     """Orden estable: sin esto, dos ejecuciones seguidas dan JSON distinto
     porque el resolver rota el RRset."""
     if rdtype in {"A", "AAAA"}:
