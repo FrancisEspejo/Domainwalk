@@ -5,9 +5,14 @@ on:
     - cron: "0 7 * * 1"
   workflow_dispatch:
 
+# contents: write para poder actualizar baseline.json tras avisar.
 permissions:
-  contents: read
+  contents: write
   issues: write
+
+concurrency:
+  group: chequeo-semanal
+  cancel-in-progress: false
 
 jobs:
   audit:
@@ -16,32 +21,36 @@ jobs:
       DOMAIN: francisravn.com
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+
       - run: pip install -e .
+
       - name: auditar
+        # exit 1 significa "hay hallazgos en rojo", no un fallo del job.
         run: domainwalk "$DOMAIN" --json --no-config -o current.json || true
-      - name: comparar
+
+      - name: comparar con la línea base
         id: cmp
-        run: |
-          python - <<'PY' >> "$GITHUB_OUTPUT"
-          import json
-          from domainwalk.diff import diff_reports
-          old = json.load(open("baseline.json"))
-          new = json.load(open("current.json"))
-          d = diff_reports(old, new)
-          print(f"changed={'false' if d['unchanged'] else 'true'}")
-          print("body<<DIFFEOF")
-          print(f"Cambios en {d['domain']} desde {d['from']}:")
-          print()
-          print("```json")
-          print(json.dumps(d, ensure_ascii=False, indent=2))
-          print("```")
-          print("DIFFEOF")
-          PY
+        run: python scripts/compare.py baseline.json current.json body.md >> "$GITHUB_OUTPUT"
+
       - name: abrir issue
         if: steps.cmp.outputs.changed == 'true'
-        run: gh issue create --title "Cambios en la superficie de $DOMAIN" --body "${{ steps.cmp.outputs.body }}"
+        run: gh issue create --title "Cambios en la superficie de $DOMAIN" --body-file body.md
         env:
           GH_TOKEN: ${{ github.token }}
+
+      # La línea base se mueve solo cuando hay algo que contar (o en el primer
+      # arranque). Sin esto, un cambio legítimo reabriría el mismo issue cada
+      # semana hasta actualizarla a mano.
+      - name: actualizar la línea base
+        if: steps.cmp.outputs.changed == 'true' || steps.cmp.outputs.first_run == 'true'
+        run: |
+          mv current.json baseline.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add baseline.json
+          git commit -m "chequeo semanal: nueva línea base de $DOMAIN"
+          git push

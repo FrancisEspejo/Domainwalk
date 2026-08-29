@@ -1,4 +1,4 @@
-# Domainwalk
+# domainwalk
 
 ![tests](https://github.com/FrancisRavn/Domainwalker/actions/workflows/tests.yml/badge.svg)
 
@@ -20,12 +20,16 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-O sin instalar el paquete:
+O sin instalar el paquete, desde la raíz del repo:
 
 ```bash
 pip install -r requirements.txt
 python3 -m domainwalk francisravn.com
 ```
+
+`python3 -m` encuentra el paquete porque el directorio actual entra en `sys.path`;
+no hace falta `PYTHONPATH`. La diferencia con lo anterior es que `pip install -e .`
+además deja disponible el comando `domainwalk` desde cualquier ruta.
 
 ## Uso
 
@@ -106,6 +110,22 @@ Ejecuta con `--no-config` para ignorar cualquier configuración.
 - `2` — error de uso, configuración ilegible, o el dominio no resuelve
 
 Sirve como *gate* en CI: un cron semanal con `--diff` te avisa cuando algo cambia sin que tengas que acordarte de mirar.
+
+## Chequeo semanal automático
+
+`.github/workflows/weekly.yml` audita el dominio cada lunes, lo compara con
+`baseline.json` y abre un issue si algo cambió.
+
+`baseline.json` es el último estado conocido, no una foto ideal: el workflow lo
+actualiza en el mismo commit en que abre el issue. Sin eso, un cambio legítimo
+—activar DNSSEC, por ejemplo— reabriría el mismo aviso cada semana hasta
+actualizarlo a mano. Lo que ves en el repo es, por tanto, el estado del dominio
+la última vez que algo se movió.
+
+Si no hay `baseline.json`, la primera ejecución lo crea sin abrir issue.
+
+Para probarlo sin esperar al lunes: pestaña **Actions** → *chequeo semanal* →
+**Run workflow**.
 
 ## Tests
 
