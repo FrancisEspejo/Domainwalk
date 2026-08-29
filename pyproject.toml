@@ -1,0 +1,29 @@
+[project]
+name = "domainwalk"
+version = "0.2.0"
+description = "Auditor de superficie pública: DNS, correo, TLS y cabeceras HTTP"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "dnspython>=2.6.1",
+  "rich>=13.7.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+domainwalk = "domainwalk.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["domainwalk*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+license = "MIT"
+license-files = ["LICENSE"]
