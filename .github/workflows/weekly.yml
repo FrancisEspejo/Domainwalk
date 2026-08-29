@@ -1,0 +1,47 @@
+name: chequeo semanal
+
+on:
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    env:
+      DOMAIN: francisravn.com
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e .
+      - name: auditar
+        run: domainwalk "$DOMAIN" --json --no-config -o current.json || true
+      - name: comparar
+        id: cmp
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from domainwalk.diff import diff_reports
+          old = json.load(open("baseline.json"))
+          new = json.load(open("current.json"))
+          d = diff_reports(old, new)
+          print(f"changed={'false' if d['unchanged'] else 'true'}")
+          print("body<<DIFFEOF")
+          print(f"Cambios en {d['domain']} desde {d['from']}:")
+          print()
+          print("```json")
+          print(json.dumps(d, ensure_ascii=False, indent=2))
+          print("```")
+          print("DIFFEOF")
+          PY
+      - name: abrir issue
+        if: steps.cmp.outputs.changed == 'true'
+        run: gh issue create --title "Cambios en la superficie de $DOMAIN" --body "${{ steps.cmp.outputs.body }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
