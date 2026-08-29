@@ -1,4 +1,4 @@
-# domainwalk
+# Domainwalk
 
 ![tests](https://github.com/FrancisRavn/Domainwalker/actions/workflows/tests.yml/badge.svg)
 
