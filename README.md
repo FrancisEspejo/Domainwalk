@@ -1,16 +1,99 @@
-# Domainwalk
+# domainwalk
 
 ![tests](https://github.com/FrancisRavn/Domainwalker/actions/workflows/tests.yml/badge.svg)
+![python](https://img.shields.io/badge/python-3.11%2B-blue)
+![license](https://img.shields.io/badge/license-MIT-green)
 
-Auditor de superficie pública para **tu** dominio: DNS, DNSSEC, SPF/DMARC/DKIM, TLS, cabeceras HTTP, `security.txt` y `robots.txt`.
+**A public-surface auditor for your own domain.** It answers one question: what does
+someone who doesn't know you see when all they have is your domain name?
 
-Responde a una pregunta concreta: qué ve de ti alguien que no te conoce y solo tiene tu dominio. Todo lo que consulta es público por diseño — los registros DNS, el certificado que sirves, las cabeceras que envías en cada respuesta.
+Everything domainwalk looks at is public by design. DNS records are meant to be
+queried by anyone. Your TLS certificate is handed to whoever connects. Your
+response headers travel with every page you serve. domainwalk doesn't discover
+anything hidden — it collects what is already in plain sight and tells you which
+parts are misconfigured, missing, or about to break.
 
-No es un escáner de vulnerabilidades ni un fuzzer. No mira tu código, ni tus dependencias, ni si tu servidor tiene un CVE. Es un chequeo de configuración: cosas que se arreglan publicando un registro DNS o añadiendo una línea al servidor.
+## What it actually checks
 
-Úsalo contra hosts que te pertenezcan.
+Four independent collectors run against the domain, each producing findings with
+a severity level (`fail`, `warn`, `info`, `ok`), a stable identifier, and — when
+something needs fixing — the exact line to publish.
 
-## Instalar
+**DNS and mail authentication.** Resolves `A`, `AAAA`, `MX`, `NS`, `TXT`, `CAA`,
+`DS`, and `DNSKEY`, plus `_dmarc` and a dozen common DKIM selectors
+(`default`, `google`, `selector1`, `protonmail`, `k1`, and others). It parses SPF
+to distinguish a hard fail (`-all`) from a softfail (`~all`), reads the DMARC
+policy to tell `p=none` from `p=quarantine` and `p=reject`, and reports which DKIM
+selectors are actually published. For DNSSEC it separates three states: no signing
+at all, signed with a `DS` in the parent zone, and the trap in between — a `DNSKEY`
+published with no `DS`, meaning the zone is signed but nobody validates the
+signature. All queries run concurrently in a thread pool, with one resolver per
+thread.
+
+**TLS.** Opens a connection on port 443 and inspects the certificate: issuer,
+subject, SANs, validity window, negotiated protocol version. When OpenSSL
+*rejects* the certificate, domainwalk reconnects without verification — solely to
+read the certificate anyway and tell you *why* it failed, rather than surfacing an
+opaque handshake error. So an expired certificate reports how many days ago it
+expired and who issued it; a hostname mismatch reports which names the certificate
+does cover. SAN matching implements wildcard semantics correctly: `*.example.com`
+matches `a.example.com` but neither `example.com` nor `a.b.example.com`.
+
+Expiry thresholds scale with the certificate's own lifetime. A fixed 45-day
+warning marks every healthy 90-day ACME certificate as a problem for half its
+life, because normal renewal passes through that window every cycle. A 90-day
+certificate warns under 14 days and fails under 6; a 398-day certificate keeps the
+classic 45/21.
+
+**HTTP.** Checks whether port 80 redirects to HTTPS *without following the
+redirect*, so it can distinguish "port 80 never answered" from "port 80 redirected
+correctly but the HTTPS destination is broken" — two very different problems that
+naive tooling reports identically. Then it fetches over HTTPS and evaluates
+`Strict-Transport-Security`, `Content-Security-Policy`, `X-Content-Type-Options`,
+`X-Frame-Options` (accepting a CSP `frame-ancestors` directive as equivalent),
+`Referrer-Policy`, and related headers.
+
+**Well-known paths.** Looks for `/.well-known/security.txt` (verifying it actually
+carries a `Contact:` line, not just a 200) and `/robots.txt`.
+
+When TLS fails to verify, every HTTPS request would fail with the same error, so
+those checks are marked *not evaluated* instead of repeating one OpenSSL message
+across four findings. One problem, one line.
+
+## Why it's worth running
+
+**It catches the failure that actually happens to you.** Not an attacker — a
+certificate quietly expiring on a Sunday, or a DNS change from six months ago that
+silently downgraded your DMARC policy. These break in ways nothing alerts you
+about until a user tells you.
+
+**It tells you what to type, not just what's wrong.** "Missing Referrer-Policy"
+sends you to a search engine. `Referrer-Policy: strict-origin-when-cross-origin`
+is something you paste into a config file. Every actionable finding carries the
+literal value or the concrete step.
+
+**It tracks change, not just state.** This is the part most similar tools don't
+do. A single report is a snapshot; the interesting question is usually what moved
+since last time. Save a report, compare against it later, and you get level
+changes marked as improvements or regressions, findings that appeared or
+disappeared, and DNS records added or removed. Output is deterministic — record
+lists are sorted, hostnames normalized to lowercase — so the RRset rotation your
+resolver performs on every query doesn't show up as a phantom change.
+
+**It knows the difference between a problem and a fact.** A domain with no `MX`
+isn't broken; it just doesn't receive mail. A missing `robots.txt` isn't a
+security finding. These are `info`, and they don't drag your grade down. And when
+a real finding is genuinely unfixable in your environment — you can't set response
+headers on GitHub Pages — you can mute it *with a recorded reason*, so six months
+from now you know why it's silenced. A red flag you can't clear is noise you learn
+to ignore.
+
+**It's honest about scope.** domainwalk is not a vulnerability scanner, a port
+scanner, or a fuzzer. It doesn't read your code, audit your dependencies, or look
+for CVEs. It checks configuration — things you fix by publishing a DNS record or
+adding a line to your server config. Run it against hosts you own.
+
+## Install
 
 ```bash
 git clone https://github.com/FrancisRavn/Domainwalker.git
@@ -20,37 +103,41 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-O sin instalar el paquete, desde la raíz del repo:
+Or without installing the package, from the repository root:
 
 ```bash
 pip install -r requirements.txt
 python3 -m domainwalk francisravn.com
 ```
 
-`python3 -m` encuentra el paquete porque el directorio actual entra en `sys.path`;
-no hace falta `PYTHONPATH`. La diferencia con lo anterior es que `pip install -e .`
-además deja disponible el comando `domainwalk` desde cualquier ruta.
+`python3 -m` finds the package because the current directory is on `sys.path`; no
+`PYTHONPATH` needed. The difference is that `pip install -e .` also makes the
+`domainwalk` command available from anywhere.
 
-## Uso
+Requires Python 3.11 or newer. Two dependencies: `dnspython` and `rich`.
+
+## Usage
 
 ```bash
 domainwalk francisravn.com
 domainwalk francisravn.com --json
-domainwalk francisravn.com --json -o informe.json
+domainwalk francisravn.com --json -o report.json
 domainwalk francisravn.com --timeout 8
 ```
 
-Cada ejecución hace consultas DNS y peticiones HTTP reales contra el dominio que le pases.
+Every run performs real DNS queries and HTTP requests against the domain you pass.
 
-Cada hallazgo en rojo o amarillo lleva un `fix`: la línea concreta que hay que publicar o la acción que hay que tomar, no solo qué falta.
+Input is normalized, so all of these are equivalent: a bare domain, a full URL
+with path and query string, a `host:port` pair, a trailing dot, or an
+internationalized name (`dominó.es` becomes `xn--domin-4ta.es`).
 
-### Ejemplo de salida
+### Sample output
 
 ```
 domainwalk  francisravn.com  FAIL
 ok=11  warn=8  fail=1  info=0  ·  2026-08-29T17:47:14+00:00
 
-nivel   id               detalle
+level   id               detail
 FAIL    hdr.hsts         Sin Strict-Transport-Security
 WARN    dns.caa          Sin CAA
 WARN    dns.dnssec       Sin DNSSEC
@@ -69,63 +156,71 @@ OK      tls.version      TLSv1.3
 
 Como arreglarlo
   - hdr.hsts    Strict-Transport-Security: max-age=63072000; includeSubDomains
-  - dns.caa     Anade CAA: 0 issue "letsencrypt.org" (ajusta a tu CA)
-  - dns.dnssec  Activalo en tu registrador y publica el DS en la zona padre.
-  - mail.spf    Cambia ~all por -all cuando confirmes que todo el correo legitimo pasa.
+  - dns.caa     Add CAA: 0 issue "letsencrypt.org" (adjust for your CA)
+  - dns.dnssec  Enable it at your registrar and publish the DS in the parent zone.
+  - mail.spf    Switch ~all to -all once you confirm all legitimate mail passes.
 ```
 
-### Comparar con una ejecución anterior
+Finding messages are currently in Spanish; the identifiers are stable and
+language-independent, which is what tooling should key off.
 
-Un informe suelto es una foto. Lo interesante suele ser qué ha cambiado: apareció un TXT nuevo, el DMARC bajó de `quarantine` a `none`, cambiaron los NS.
+### Comparing against a previous run
 
 ```bash
-domainwalk francisravn.com -o informes/$(date +%F).json
-domainwalk francisravn.com --diff informes/2026-08-01.json
-domainwalk francisravn.com --diff informes/2026-08-01.json --diff-output cambios.json
+domainwalk francisravn.com -o reports/$(date +%F).json
+domainwalk francisravn.com --diff reports/2026-08-01.json
+domainwalk francisravn.com --diff reports/2026-08-01.json --diff-output changes.json
 ```
 
-El diff señala hallazgos nuevos, hallazgos que ya no aparecen, cambios de nivel (marcando si mejoran o empeoran) y altas y bajas de registros DNS. La salida es determinista: las listas van ordenadas y los nombres de host normalizados, así que la rotación del RRset que hace el resolver no aparece como un cambio falso.
+`-o` always writes the plain report, even when `--diff` is used in the same
+command, so today's file is a valid baseline for tomorrow's comparison. The
+comparison result goes to `--diff-output`, or to stdout with `--json`.
 
-`-o` guarda siempre el informe a secas, aunque uses `--diff` a la vez: así el archivo de hoy sirve de línea base para la comparación de mañana. El resultado de la comparación va a `--diff-output`, o a la salida estándar con `--json`.
+The diff is level-based, not text-based: a certificate renewal that leaves
+`tls.expiry` green produces no noise, but a DMARC policy dropping from `reject` to
+`none` shows up as a regression. Muted findings are compared at their real
+severity, so silencing something never hides a regression in it.
 
-### Silenciar lo que no puedes arreglar
+### Muting what you can't fix
 
-Si el sitio está en GitHub Pages no controlas las cabeceras de respuesta, y un FAIL que no puedes cerrar acaba siendo ruido que aprendes a ignorar. Crea un `.domainwalk.toml` en la raíz (o `~/.config/domainwalk/config.toml`):
+Create a `.domainwalk.toml` in the repository root (or
+`~/.config/domainwalk/config.toml`):
 
 ```toml
 timeout = 8.0
 
 [mute]
-"hdr.*" = "GitHub Pages no permite cabeceras propias"
+"hdr.*" = "GitHub Pages doesn't allow custom response headers"
 ```
 
-Lo silenciado baja a `INFO`, no cuenta para el grade y sale con su motivo, de forma que dentro de seis meses sabrás por qué está ahí. El diff sigue viendo el nivel real: si algo silenciado empeora, te enteras igual.
+Muted findings drop to `INFO`, stop counting toward the grade, and are printed
+with their reason. Patterns are supported, so `hdr.*` covers every header check.
+Run with `--no-config` to ignore configuration entirely.
 
-Ejecuta con `--no-config` para ignorar cualquier configuración.
+## Exit codes
 
-## Códigos de salida
+- `0` — nothing red
+- `1` — at least one failure
+- `2` — usage error, unreadable configuration, or the domain doesn't resolve
 
-- `0` — no hay hallazgos en rojo
-- `1` — hay al menos un fallo
-- `2` — error de uso, configuración ilegible, o el dominio no resuelve
+That makes it usable as a CI gate.
 
-Sirve como *gate* en CI: un cron semanal con `--diff` te avisa cuando algo cambia sin que tengas que acordarte de mirar.
+## Automated weekly check
 
-## Chequeo semanal automático
+`.github/workflows/weekly.yml` audits the domain every Monday, compares it against
+`baseline.json`, and opens an issue if anything changed.
 
-`.github/workflows/weekly.yml` audita el dominio cada lunes, lo compara con
-`baseline.json` y abre un issue si algo cambió.
+`baseline.json` is the last known state, not an ideal snapshot: the workflow
+updates it in the same commit that opens the issue. Without that, a legitimate
+change — enabling DNSSEC, say — would reopen the same issue every week until you
+updated it by hand. What you see in the repository is therefore the state of the
+domain the last time something moved.
 
-`baseline.json` es el último estado conocido, no una foto ideal: el workflow lo
-actualiza en el mismo commit en que abre el issue. Sin eso, un cambio legítimo
-—activar DNSSEC, por ejemplo— reabriría el mismo aviso cada semana hasta
-actualizarlo a mano. Lo que ves en el repo es, por tanto, el estado del dominio
-la última vez que algo se movió.
+If `baseline.json` doesn't exist, the first run creates it without opening an
+issue.
 
-Si no hay `baseline.json`, la primera ejecución lo crea sin abrir issue.
-
-Para probarlo sin esperar al lunes: pestaña **Actions** → *chequeo semanal* →
-**Run workflow**.
+To test it without waiting for Monday: **Actions** → *chequeo semanal* → **Run
+workflow**.
 
 ## Tests
 
@@ -134,17 +229,28 @@ pip install -e ".[dev]"
 pytest
 ```
 
-No sale nada a internet: las pruebas de TLS y de redirección levantan servidores locales en puertos efímeros. El certificado de `tests/fixtures/` es autofirmado y existe solo para eso — su clave privada no protege nada.
+Nothing touches the network. The TLS and redirect tests spin up local servers on
+ephemeral ports; the certificate in `tests/fixtures/` is self-signed and exists
+only for that — its private key protects nothing.
 
-## Notas de implementación
+The suite covers domain normalization, wildcard SAN matching, expiry threshold
+scaling, record sorting, mute semantics, diff behavior, and the two integration
+paths that matter most: reading a certificate OpenSSL rejected, and reporting a
+redirect without following it.
 
-- Cuando OpenSSL rechaza el certificado, se reconecta sin verificar **solo** para poder leerlo y decirte por qué falla (caducidad, SAN, emisor). Eso usa `ssl._ssl._test_decode_cert`, API privada de CPython; si prefieres algo con garantías, sustituye `_decode_der` por `cryptography.x509`.
-- Si TLS no verifica, los checks HTTPS se marcan como no evaluados en vez de repetir el mismo error de OpenSSL en cada uno. Un problema, una línea.
-- El chequeo del puerto 80 no sigue redirecciones, así que distingue "no contestó" de "redirigió bien pero el destino falla".
-- El umbral de caducidad se escala con la duración del certificado. Con un umbral fijo, cualquier certificado ACME de 90 días sano sale en amarillo la mitad de su vida, porque su renovación normal pasa por esa ventana cada ciclo.
-- La fecha del certificado se parsea con `ssl.cert_time_to_seconds`, que lleva los meses en una tupla y no depende del locale.
-- Las consultas DNS y los dos bloques de red van en paralelo.
+## Implementation notes
 
-## Licencia
+- Reading a rejected certificate uses `ssl._ssl._test_decode_cert`, a private
+  CPython API — stable across 3.11–3.13 but not guaranteed. Swap `_decode_der` for
+  `cryptography.x509` if you want a supported path.
+- Certificate dates are parsed with `ssl.cert_time_to_seconds`, which hardcodes
+  month names and is therefore locale-independent. Using `strptime` with `%b`
+  raises `ValueError` under a non-English `LC_TIME`.
+- DNS queries and the two network phases run in parallel; finding order is
+  computed at print time, so it never depends on which check finishes first.
+- Hostnames are lowercased for `MX`, `NS`, `CNAME`, `DS`, and `PTR`. `CAA` values
+  are left alone because their parameters may be case-sensitive.
 
-MIT — ver [LICENSE](LICENSE).
+## License
+
+MIT — see [LICENSE](LICENSE).
