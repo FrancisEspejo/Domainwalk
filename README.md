@@ -1,4 +1,4 @@
-# domainwalk
+# Domainwalk
 
 ![tests](https://github.com/FrancisEspejo/Domainwalk/actions/workflows/tests.yml/badge.svg)
 [![PyPI](https://img.shields.io/pypi/v/domainwalk)](https://pypi.org/project/domainwalk/)
