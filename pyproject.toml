@@ -1,6 +1,6 @@
 [project]
 name = "domainwalk"
-version = "0.2.2"
+version = "0.3.0"
 description = "CLI que audita la superficie pública de un dominio: DNS, DNSSEC, SPF/DKIM/DMARC, TLS y cabeceras HTTP"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -27,8 +27,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/FrancisRavn/domainwalk"
-Issues = "https://github.com/FrancisRavn/domainwalk/issues"
+Homepage = "https://github.com/FrancisRavn/Domainwalk"
+Issues = "https://github.com/FrancisRavn/Domainwalk/issues"
 
 [project.optional-dependencies]
 # Evita depender de ssl._ssl._test_decode_cert, que es API privada de CPython.
