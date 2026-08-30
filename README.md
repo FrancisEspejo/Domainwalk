@@ -1,6 +1,6 @@
 # domainwalk
 
-![tests](https://github.com/FrancisRavn/Domainwalk/actions/workflows/tests.yml/badge.svg)
+![tests](https://github.com/FrancisEspejo/Domainwalk/actions/workflows/tests.yml/badge.svg)
 [![PyPI](https://img.shields.io/pypi/v/domainwalk)](https://pypi.org/project/domainwalk/)
 ![python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
@@ -72,7 +72,7 @@ features.
 For hacking on it, or to run the tests.
 
 ```bash
-git clone https://github.com/FrancisRavn/Domainwalk.git
+git clone https://github.com/FrancisEspejo/Domainwalk.git
 cd Domainwalk
 python3 -m venv .venv
 source .venv/bin/activate
@@ -352,4 +352,4 @@ exactly what to publish. If a finding cannot be acted on, it is probably `info`.
 
 ## License
 
-MIT, see [LICENSE](https://github.com/FrancisRavn/Domainwalk/blob/main/LICENSE).
+MIT, see [LICENSE](https://github.com/FrancisEspejo/Domainwalk/blob/main/LICENSE).
