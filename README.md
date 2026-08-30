@@ -1,10 +1,10 @@
-# Domainwalk
+# domainwalk
 
-![tests](https://github.com/FrancisRavn/Domainwalker/actions/workflows/tests.yml/badge.svg)
+![tests](https://github.com/FrancisRavn/domainwalk/actions/workflows/tests.yml/badge.svg)
 ![python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 
-A command line tool that audits the public attack surface of your own domain. DNS
+A command line tool that audits the public attack surface of a domain you own. DNS
 records, DNSSEC, SPF, DKIM, DMARC, TLS certificates, HTTP security headers,
 `security.txt` and `robots.txt`, all in one pass.
 
@@ -114,34 +114,41 @@ adding a line to your server config. Run it against hosts you own.
 
 ## Install
 
+Python 3.11 or newer. On Debian and Ubuntu install `python3-venv` first, since
+those distros ship it separately and block `pip` outside a virtualenv.
+
 ```bash
-git clone https://github.com/FrancisRavn/Domainwalker.git
-cd Domainwalker
+sudo apt install python3-venv    # Debian and Ubuntu only
+git clone https://github.com/FrancisRavn/domainwalk.git
+cd domainwalk
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .
+pip install -e ".[crypto]"
 ```
 
-Or without installing the package, from the repository root.
+Two runtime dependencies, `dnspython` and `rich`. The `crypto` extra pulls in
+`cryptography` and is recommended. Without it, reading a certificate that OpenSSL
+rejected falls back to a private CPython API that works today but carries no
+stability promise.
+
+To run without installing the package, from the repository root.
 
 ```bash
-pip install -r requirements.txt
-python3 -m domainwalk francisravn.com
+pip install dnspython rich
+python3 -m domainwalk example.com
 ```
 
 `python3 -m` finds the package because the current directory sits on `sys.path`,
 so no `PYTHONPATH` needed. The difference is that `pip install -e .` also gives
 you the `domainwalk` command from anywhere.
 
-Python 3.11 or newer. Two dependencies, `dnspython` and `rich`.
-
 ## Usage
 
 ```bash
-domainwalk francisravn.com
-domainwalk francisravn.com --json
-domainwalk francisravn.com --json -o report.json
-domainwalk francisravn.com --timeout 8
+domainwalk example.com
+domainwalk example.com --json
+domainwalk example.com --json -o report.json
+domainwalk example.com --timeout 8
 ```
 
 Every run makes real DNS queries and real HTTP requests against the domain you
@@ -155,41 +162,64 @@ internationalized name like `dominó.es`, which becomes `xn--domin-4ta.es`.
 
 ```
 domainwalk  francisravn.com  FAIL
-ok=11  warn=8  fail=1  info=0  ·  2026-08-29T17:47:14+00:00
+ok=11  warn=8  fail=1  info=1  |  2026-08-30T09:12:04+00:00
 
-nivel   id               detalle
-FAIL    hdr.hsts         Sin Strict-Transport-Security
-WARN    dns.caa          Sin CAA
-WARN    dns.dnssec       Sin DNSSEC
-WARN    hdr.csp          Sin Content-Security-Policy
-WARN    mail.spf         SPF en softfail: v=spf1 include:_spf.protonmail.ch ~all
+level   id               detail
+FAIL    hdr.hsts         No Strict-Transport-Security
+WARN    dns.caa          No CAA
+WARN    dns.dnssec       No DNSSEC
+WARN    hdr.csp          No Content-Security-Policy
+WARN    hdr.frame        No X-Frame-Options and no CSP frame-ancestors
+WARN    hdr.referrer     No Referrer-Policy
+WARN    hdr.xcto         No X-Content-Type-Options: nosniff
+WARN    mail.spf         SPF softfail: v=spf1 include:_spf.protonmail.ch ~all
 WARN    wk.security_txt  https://francisravn.com/.well-known/security.txt -> 404
+INFO    wk.robots_txt    https://francisravn.com/robots.txt -> 404
 OK      dns.address      A=4 AAAA=4
 OK      dns.mx           2 MX
 OK      dns.www          francisravn.github.io
 OK      http.redirect    HTTP 301 -> https://francisravn.com/
-OK      mail.dkim        Selectores: protonmail
+OK      https.status     HTTPS 200
+OK      mail.dkim        Selectors: protonmail
 OK      mail.dmarc       v=DMARC1; p=quarantine
-OK      tls.expiry       Caduca en 89 dias (2026-11-27T11:37:46+00:00) - vida 89d
+OK      tls.expiry       Expires in 89 days (2026-11-27T11:37:46+00:00) - 90d lifetime
 OK      tls.san          francisravn.com, www.francisravn.com
 OK      tls.version      TLSv1.3
 
-Como arreglarlo
-  - hdr.hsts    Strict-Transport-Security: max-age=63072000; includeSubDomains
-  - dns.caa     Add CAA: 0 issue "letsencrypt.org" (adjust for your CA)
-  - dns.dnssec  Enable it at your registrar and publish the DS in the parent zone
-  - mail.spf    Switch ~all to -all once all legitimate mail passes
+How to fix
+  hdr.hsts         Strict-Transport-Security: max-age=63072000; includeSubDomains
+  dns.caa          Add CAA: 0 issue "letsencrypt.org" (adjust for your CA) to limit who can issue.
+  dns.dnssec       Enable it at your registrar and publish the DS in the parent zone.
+  hdr.csp          Content-Security-Policy: default-src 'self'; frame-ancestors 'none' (tighten from there)
+  hdr.frame        Content-Security-Policy: frame-ancestors 'none' (or X-Frame-Options: DENY)
+  hdr.referrer     Referrer-Policy: strict-origin-when-cross-origin
+  hdr.xcto         X-Content-Type-Options: nosniff
+  mail.spf         Switch ~all to -all once you confirm all legitimate mail passes.
+  wk.security_txt  Publish /.well-known/security.txt with Contact: and Expires: lines.
 ```
 
-Finding messages are in Spanish right now. The ids are stable and language
-independent, which is what any tooling should key off anyway.
+And what a comparison against a previous run looks like when something moved.
+
+```
+domainwalk diff  francisravn.com
+2026-08-01T07:00:11+00:00  ->  2026-09-01T07:00:09+00:00
+
+Severity changes
+  ^ dns.caa     warn -> ok    0 issue "letsencrypt.org"
+  v mail.dmarc  ok -> warn    DMARC p=none: v=DMARC1; p=none
+
+DNS records
+  + caa  0 issue "letsencrypt.org"
+  + dmarc  v=DMARC1; p=none
+  - dmarc  v=DMARC1; p=quarantine
+```
 
 ### Comparing against a previous run
 
 ```bash
-domainwalk francisravn.com -o reports/$(date +%F).json
-domainwalk francisravn.com --diff reports/2026-08-01.json
-domainwalk francisravn.com --diff reports/2026-08-01.json --diff-output changes.json
+domainwalk example.com -o reports/$(date +%F).json
+domainwalk example.com --diff reports/2026-08-01.json
+domainwalk example.com --diff reports/2026-08-01.json --diff-output changes.json
 ```
 
 `-o` always writes the plain report, even when you pass `--diff` in the same
@@ -203,7 +233,7 @@ severity, so silencing something never hides a regression inside it.
 
 ### Muting what you can't fix
 
-Drop a `.domainwalk.toml` in the repository root, or in
+Drop a `.domainwalk.toml` in the working directory, or in
 `~/.config/domainwalk/config.toml`.
 
 ```toml
@@ -227,19 +257,23 @@ Good enough to use as a CI gate.
 
 ## Automated weekly check
 
-`.github/workflows/weekly.yml` audits the domain every Monday, compares it against
-`baseline.json`, and opens an issue when something changed.
+`.github/workflows/weekly.yml` audits a domain every Monday, compares it against
+the previous run, and opens an issue when something changed.
 
-`baseline.json` holds the last known state, not an ideal snapshot. The workflow
-updates it in the same commit that opens the issue. Without that, a legitimate
-change like enabling DNSSEC would reopen the same issue every week until you fixed
-the file by hand. So what sits in the repo is the state of the domain the last
-time anything moved.
+Set the target in **Settings**, **Secrets and variables**, **Actions**,
+**Variables**, as a repository variable named `DOMAIN`. You can also override it
+per run from the workflow dispatch form.
 
-If `baseline.json` is missing, the first run creates it and opens nothing.
+The baseline lives on its own `baseline` branch, not on `main`. The bot
+force pushes a single file there and never touches your working branch, so you
+won't come back on Monday to a diverged `main`. It only moves the baseline when
+there was something to report, because otherwise a legitimate change like enabling
+DNSSEC would reopen the same issue every week until you fixed the file by hand.
 
-To try it without waiting for Monday, go to **Actions**, pick *chequeo semanal*,
-then **Run workflow**.
+First run creates the branch and opens nothing.
+
+To try it without waiting for Monday, go to **Actions**, pick *weekly check*, then
+**Run workflow**.
 
 ## Tests
 
@@ -253,15 +287,16 @@ ephemeral ports. The certificate in `tests/fixtures/` is self signed and exists
 only for that, and its private key protects nothing.
 
 The suite covers domain normalization, wildcard SAN matching, expiry threshold
-scaling, record sorting, mute semantics, diff behavior, and the two integration
-paths that matter most. Reading a certificate OpenSSL rejected, and reporting a
-redirect without following it.
+scaling, record sorting, mute semantics, diff behavior, and three integration
+paths. Reading a certificate OpenSSL rejected, reporting a redirect without
+following it, and checking that both certificate decoders agree so your results
+don't depend on which extras you installed.
 
 ## Implementation notes
 
-- Reading a rejected certificate goes through `ssl._ssl._test_decode_cert`, a
-  private CPython API. Stable across 3.11 to 3.13 but not guaranteed. Swap
-  `_decode_der` for `cryptography.x509` if you want a supported path.
+- Certificates are decoded with `cryptography` when available. The fallback is
+  `ssl._ssl._test_decode_cert`, a private CPython API that works on 3.11 to 3.13
+  with no promises beyond that. A test asserts both paths return identical fields.
 - Certificate dates use `ssl.cert_time_to_seconds`, which hardcodes month names
   and ignores the locale. Parsing with `strptime` and `%b` raises `ValueError`
   under a non English `LC_TIME`, which is a fun one to debug in production.

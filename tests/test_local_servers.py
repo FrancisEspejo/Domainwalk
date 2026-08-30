@@ -1,4 +1,4 @@
-"""Integración contra servidores locales. No sale nada a internet."""
+"""Integration against local servers. Nothing touches the network."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 @pytest.fixture(scope="module")
 def tls_server():
-    """Servidor TLS con certificado autofirmado en un puerto libre."""
+    """TLS server with a self signed certificate on a free port."""
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(FIXTURES / "cert.pem", FIXTURES / "key.pem")
     srv = socket.socket()
@@ -45,13 +45,13 @@ def tls_server():
 
 
 def test_tls_reads_cert_even_when_verification_fails(tls_server):
-    """La regresión importante: un cert que OpenSSL rechaza tiene que poder
-    diagnosticarse igual, no quedarse en un error críptico de conexión."""
+    """The regression that matters. A certificate OpenSSL rejects must still be
+    diagnosable instead of collapsing into a cryptic connection error."""
     result = collect_tls("localhost", timeout=5.0, port=tls_server)
     ids = {f["id"]: f for f in result["findings"]}
 
     assert result["verified"] is False
-    assert "tls.connect" not in ids  # se conectó: el fallo fue de cadena, no de red
+    assert "tls.connect" not in ids  # it connected, the failure was the chain, not the network
     assert ids["tls.verify"]["level"] == "fail"
     assert result["issuer"] == "domainwalk test CA"
     assert result["san"] == ["localhost", "www.localhost"]
@@ -67,7 +67,7 @@ def test_tls_expiry_parsing_is_locale_independent(tls_server, monkeypatch):
     try:
         locale.setlocale(locale.LC_TIME, "es_ES.UTF-8")
     except locale.Error:
-        pytest.skip("locale es_ES.UTF-8 no instalado")
+        pytest.skip("locale es_ES.UTF-8 not installed")
     try:
         result = collect_tls("localhost", timeout=5.0, port=tls_server)
         assert result["days_left"] is not None
@@ -109,8 +109,8 @@ def _serve(handler):
 
 
 def test_plain_http_reports_the_redirect_not_the_destination():
-    """Antes, urlopen seguía el 301 y un TLS roto en destino se reportaba como
-    'HTTP no contestó'. El puerto 80 sí contestó."""
+    """urlopen used to follow the 301, so broken TLS at the destination was
+    reported as 'port 80 did not answer'. Port 80 answered just fine."""
     srv = _serve(_Redirect)
     try:
         host = f"127.0.0.1:{srv.server_port}"
@@ -135,12 +135,12 @@ def test_plain_http_without_redirect_is_a_fail():
 def test_plain_http_closed_port_is_a_warn():
     _, item = _check_plain_http("127.0.0.1:1", timeout=2.0)
     assert item["level"] == "warn"
-    assert "puerto 80" in item["msg"]
+    assert "Port 80" in item["msg"]
 
 
 def test_https_checks_are_skipped_when_tls_is_broken():
-    """Un problema, una línea: sin TLS válido no se repite el error de OpenSSL
-    en cada check HTTPS."""
+    """One problem, one line. Without valid TLS the OpenSSL error is not
+    repeated across every HTTPS check."""
     srv = _serve(_Redirect)
     try:
         result = collect_http(f"127.0.0.1:{srv.server_port}", timeout=5.0, tls_ok=False)
@@ -154,3 +154,34 @@ def test_https_checks_are_skipped_when_tls_is_broken():
 
     wk = collect_well_known("127.0.0.1", timeout=5.0, tls_ok=False)
     assert [f["id"] for f in wk["findings"]] == ["wk.skipped"]
+
+
+def test_both_certificate_decoders_agree():
+    """The cryptography path and the stdlib fallback must agree.
+
+    If they diverge, the diagnosis of a rejected certificate would depend on
+    which extras the user happened to install.
+    """
+    from domainwalk.http_checks import _cert_time, _decode_der_cryptography, _decode_der_stdlib
+
+    try:
+        import cryptography  # noqa: F401
+    except ImportError:
+        pytest.skip("cryptography not installed")
+
+    der = ssl.PEM_cert_to_DER_cert((FIXTURES / "cert.pem").read_text())
+
+    def fields(cert):
+        return (
+            dict(x[0] for x in cert.get("subject", ())),
+            dict(x[0] for x in cert.get("issuer", ())),
+            sorted(e[1] for e in cert.get("subjectAltName", ()) if e[0] == "DNS"),
+            _cert_time(cert, "notAfter"),
+            _cert_time(cert, "notBefore"),
+        )
+
+    modern = fields(_decode_der_cryptography(der))
+    legacy = fields(_decode_der_stdlib(der))
+    assert modern == legacy
+    assert modern[1]["organizationName"] == "domainwalk test CA"
+    assert modern[2] == ["localhost", "www.localhost"]

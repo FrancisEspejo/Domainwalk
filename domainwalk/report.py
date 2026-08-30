@@ -10,7 +10,7 @@ LEVEL_STYLE = {"ok": "green", "warn": "yellow", "fail": "red", "info": "cyan"}
 LEVEL_MARK = {"ok": "OK", "warn": "WARN", "fail": "FAIL", "info": "INFO"}
 DIR_STYLE = {"worse": "red", "better": "green"}
 
-# Un CSP real puede pasar de 3.000 caracteres y sepultar el resto del informe.
+# A real CSP can run past 3,000 characters and bury the rest of the report.
 HEADER_LIMIT = 160
 
 
@@ -27,26 +27,26 @@ def print_report(report: dict, console: Console | None = None) -> None:
     console.print(f"\n[bold]domainwalk[/bold]  {report['domain']}  [{grade_style}]{summary['grade']}[/]")
     counts = f"ok={summary['ok']}  warn={summary['warn']}  fail={summary['fail']}  info={summary.get('info', 0)}"
     if summary.get("muted"):
-        counts += f"  (silenciados: {summary['muted']})"
-    console.print(f"{counts}  ·  {report.get('generated_at', '')}\n")
+        counts += f"  ({summary['muted']} muted)"
+    console.print(f"{counts}  |  {report.get('generated_at', '')}\n")
 
     findings = sort_findings(flatten_findings(report))
 
     table = Table(show_header=True, header_style="bold", box=None, pad_edge=False)
-    table.add_column("nivel", width=6)
+    table.add_column("level", width=6)
     table.add_column("id", style="dim", no_wrap=True)
-    table.add_column("detalle")
+    table.add_column("detail")
     for item in findings:
         mark = Text(LEVEL_MARK[item["level"]], style=LEVEL_STYLE[item["level"]])
         msg = item["msg"]
         if item.get("muted"):
-            msg += f"  [dim](silenciado: {item['mute_reason']})[/dim]"
+            msg += f"  [dim](muted: {item['mute_reason']})[/dim]"
         table.add_row(mark, item["id"], msg)
     console.print(table)
 
     pending = [f for f in findings if f.get("fix") and f["level"] in {"fail", "warn"}]
     if pending:
-        console.print("\n[bold]Cómo arreglarlo[/bold]")
+        console.print("\n[bold]How to fix[/bold]")
         for item in pending:
             console.print(f"  [{LEVEL_STYLE[item['level']]}]•[/] [dim]{item['id']}[/dim]  {item['fix']}")
 
@@ -54,12 +54,12 @@ def print_report(report: dict, console: Console | None = None) -> None:
     if dns:
         console.print("\n[bold]DNS[/bold]")
         for label, key in (("A", "a"), ("AAAA", "aaaa"), ("MX", "mx"), ("NS", "ns"), ("CAA", "caa"), ("DS", "ds")):
-            console.print(f"  {label:<6} {_short(', '.join(dns.get(key) or []), 300) or '—'}")
+            console.print(f"  {label:<6} {_short(', '.join(dns.get(key) or []), 300) or '-'}")
 
     tls = report.get("tls", {})
     console.print("\n[bold]TLS[/bold]")
     if tls.get("issuer"):
-        verified = "verificado" if tls.get("verified") else "[red]sin verificar[/red]"
+        verified = "verified" if tls.get("verified") else "[red]not verified[/red]"
         console.print(f"  issuer {tls['issuer']}  {tls.get('tls_version')}  days_left={tls.get('days_left')}  {verified}")
     elif tls.get("findings"):
         console.print(f"  {tls['findings'][0]['msg']}")
@@ -67,9 +67,9 @@ def print_report(report: dict, console: Console | None = None) -> None:
     http = report.get("http", {})
     console.print("\n[bold]HTTP[/bold]")
     if http.get("skipped"):
-        console.print("  [cyan]no evaluado (TLS no verifica)[/cyan]")
+        console.print("  [cyan]not evaluated, TLS does not validate[/cyan]")
     else:
-        console.print(f"  status {http.get('status', '—')}")
+        console.print(f"  status {http.get('status', '-')}")
         for key, value in (http.get("headers") or {}).items():
             console.print(f"  {key}: {_short(value)}")
     console.print()
@@ -78,36 +78,36 @@ def print_report(report: dict, console: Console | None = None) -> None:
 def print_diff(result: dict, console: Console | None = None) -> None:
     console = console or Console()
     console.print(f"\n[bold]domainwalk diff[/bold]  {result['domain']}")
-    console.print(f"[dim]{result.get('from') or '?'}  →  {result.get('to') or '?'}[/dim]\n")
+    console.print(f"[dim]{result.get('from') or '?'}  ->  {result.get('to') or '?'}[/dim]\n")
 
     if result["unchanged"]:
-        console.print("Sin cambios.\n")
+        console.print("No changes.\n")
         return
 
     grade = result["grade"]
     if grade["changed"]:
-        console.print(f"grade  {grade['from']} → [bold]{grade['to']}[/bold]\n")
+        console.print(f"grade  {grade['from']} -> [bold]{grade['to']}[/bold]\n")
 
     changed = result["findings"]["changed"]
     if changed:
-        console.print("[bold]Cambios de nivel[/bold]")
+        console.print("[bold]Severity changes[/bold]")
         for item in changed:
             style = DIR_STYLE[item["direction"]]
-            arrow = "↓" if item["direction"] == "worse" else "↑"
-            console.print(f"  [{style}]{arrow}[/] [dim]{item['id']}[/dim]  {item['from']} → {item['to']}  {item['msg']}")
+            arrow = "v" if item["direction"] == "worse" else "^"
+            console.print(f"  [{style}]{arrow}[/] [dim]{item['id']}[/dim]  {item['from']} -> {item['to']}  {item['msg']}")
 
     if result["findings"]["new"]:
-        console.print("\n[bold]Nuevos[/bold]")
+        console.print("\n[bold]New findings[/bold]")
         for item in result["findings"]["new"]:
             console.print(f"  [{LEVEL_STYLE[item['level']]}]+[/] [dim]{item['id']}[/dim]  {item['msg']}")
 
     if result["findings"]["resolved"]:
-        console.print("\n[bold]Desaparecidos[/bold]")
+        console.print("\n[bold]Gone[/bold]")
         for item in result["findings"]["resolved"]:
             console.print(f"  [green]-[/] [dim]{item['id']}[/dim]  {item['msg']}")
 
     if result["records"]:
-        console.print("\n[bold]Registros[/bold]")
+        console.print("\n[bold]DNS records[/bold]")
         for field, delta in result["records"].items():
             for value in delta["added"]:
                 console.print(f"  [green]+[/] {field}  {value}")

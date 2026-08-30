@@ -1,11 +1,17 @@
 # Security policy
 
-If you find a security issue in domainwalk, email **fran@francisravn.com** instead of opening a public issue. I try to reply within a week.
+If you find a security problem in domainwalk, email **fran@francisravn.com**
+instead of opening a public issue. I try to reply within a week.
 
-Include the version (`domainwalk --version`), the domain or the scenario you can reproduce it with, and what you expected to happen.
+Include the version (`domainwalk --version`), the domain or scenario that
+reproduces it, and what you expected to happen.
 
 ## Scope
 
-domainwalk only reads public information: DNS queries, the certificate the host presents, and HTTP response headers. It does not authenticate, it does not send data to third parties, and it does not store anything beyond the files you ask for with `-o`.
+domainwalk only reads public information. DNS queries, the certificate a host
+presents, and HTTP response headers. It does not authenticate, does not send data
+anywhere, and stores nothing beyond the files you ask for with `-o`.
 
-JSON reports include the full DNS records of the domain under audit. Those records are public by definition, but keep that in mind before you push them to someone else’s repo.
+JSON reports contain the full DNS records of the audited domain. Those are public
+by definition, but keep it in mind before uploading them to someone else's
+repository.

@@ -1,13 +1,10 @@
-# Copia a .domainwalk.toml en la raíz del proyecto (o a ~/.config/domainwalk/config.toml).
+# Copy to .domainwalk.toml in your working directory, or to
+# ~/.config/domainwalk/config.toml.
 
 timeout = 8.0
 
-# Los hallazgos silenciados bajan a INFO y no cuentan para el grade.
-# La razón sale en el informe, así que dentro de seis meses sabrás por qué está ahí.
-# Se admite comodín: "hdr.*" silencia todas las cabeceras.
+# Muted findings drop to INFO and stop counting toward the grade. The reason is
+# printed with the finding, so six months from now you know why it is quiet.
+# Patterns work, so "hdr.*" covers every header check.
 [mute]
-"hdr.hsts" = "GitHub Pages no permite cabeceras propias"
-"hdr.csp" = "GitHub Pages no permite cabeceras propias"
-"hdr.xcto" = "GitHub Pages no permite cabeceras propias"
-"hdr.frame" = "GitHub Pages no permite cabeceras propias"
-"hdr.referrer" = "GitHub Pages no permite cabeceras propias"
+"hdr.*" = "GitHub Pages does not allow custom response headers"

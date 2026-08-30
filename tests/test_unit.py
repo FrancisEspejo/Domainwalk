@@ -1,4 +1,4 @@
-"""Tests que no tocan la red."""
+"""Tests that never touch the network."""
 
 from __future__ import annotations
 
@@ -39,8 +39,8 @@ def test_normalize_domain_rejects(raw):
     [
         ("example.com", ["example.com"], True),
         ("a.example.com", ["*.example.com"], True),
-        ("example.com", ["*.example.com"], False),  # el comodín no cubre el ápice
-        ("a.b.example.com", ["*.example.com"], False),  # ni dos niveles
+        ("example.com", ["*.example.com"], False),  # a wildcard does not cover the apex
+        ("a.b.example.com", ["*.example.com"], False),  # nor two levels down
         ("EXAMPLE.com", ["example.com."], True),
         ("wrong.host.badssl.com", ["*.badssl.com", "badssl.com"], False),
     ],
@@ -56,7 +56,7 @@ def test_sorted_records_is_stable():
 
 
 def test_mx_sorts_by_priority_not_by_string():
-    # "100 z" antes que "20 a" si se ordena como texto: eso sería un bug.
+    # Sorted as text, "100 z" would land before "20 a". That would be a bug.
     assert _sorted_records("MX", ["100 z.example", "20 a.example"]) == ["20 a.example", "100 z.example"]
 
 
@@ -79,43 +79,43 @@ def _report(findings, **dns):
 
 
 def test_mute_downgrades_and_keeps_original_level():
-    report = _report([finding("fail", "hdr.hsts", "Sin HSTS"), finding("warn", "dns.caa", "Sin CAA")])
-    apply_mutes(report, {"hdr.*": "Pages no deja cabeceras"})
+    report = _report([finding("fail", "hdr.hsts", "No HSTS"), finding("warn", "dns.caa", "No CAA")])
+    apply_mutes(report, {"hdr.*": "Pages does not allow headers"})
     item = report["dns"]["findings"][0]
     assert item["level"] == "info"
     assert item["original_level"] == "fail"
-    assert item["mute_reason"] == "Pages no deja cabeceras"
-    assert report["summary"]["grade"] == "WARN"  # el warn no silenciado manda
+    assert item["mute_reason"] == "Pages does not allow headers"
+    assert report["summary"]["grade"] == "WARN"  # the unmuted warn still decides
     assert report["summary"]["muted"] == 1
 
 
 def test_mute_reason_patterns():
-    mute = {"hdr.*": "por patrón", "dns.caa": "exacto"}
-    assert mute_reason("dns.caa", mute) == "exacto"
-    assert mute_reason("hdr.csp", mute) == "por patrón"
+    mute = {"hdr.*": "by pattern", "dns.caa": "exact"}
+    assert mute_reason("dns.caa", mute) == "exact"
+    assert mute_reason("hdr.csp", mute) == "by pattern"
     assert mute_reason("tls.expiry", mute) is None
 
 
 def test_load_config(tmp_path):
-    (tmp_path / ".domainwalk.toml").write_text('timeout = 3.5\n[mute]\n"hdr.hsts" = "motivo"\n', encoding="utf-8")
+    (tmp_path / ".domainwalk.toml").write_text('timeout = 3.5\n[mute]\n"hdr.hsts" = "reason"\n', encoding="utf-8")
     config = load_config(cwd=tmp_path)
     assert config.timeout == 3.5
-    assert config.mute == {"hdr.hsts": "motivo"}
+    assert config.mute == {"hdr.hsts": "reason"}
 
 
 def test_load_config_missing_explicit(tmp_path):
     with pytest.raises(FileNotFoundError):
-        load_config(str(tmp_path / "no-existe.toml"))
+        load_config(str(tmp_path / "does-not-exist.toml"))
 
 
 def test_load_config_absent_is_empty(tmp_path, monkeypatch):
-    monkeypatch.setattr("domainwalk.config.USER_CONFIG", tmp_path / "nada.toml")
+    monkeypatch.setattr("domainwalk.config.USER_CONFIG", tmp_path / "none.toml")
     assert load_config(cwd=tmp_path) == Config()
 
 
 def test_diff_detects_regression_and_fix():
-    old = _report([finding("ok", "mail.dmarc", "p=reject"), finding("warn", "dns.caa", "Sin CAA")], a=["1.1.1.1"])
-    new = _report([finding("warn", "mail.dmarc", "DMARC p=none"), finding("fail", "tls.expiry", "Caducado")], a=["2.2.2.2"])
+    old = _report([finding("ok", "mail.dmarc", "p=reject"), finding("warn", "dns.caa", "No CAA")], a=["1.1.1.1"])
+    new = _report([finding("warn", "mail.dmarc", "DMARC p=none"), finding("fail", "tls.expiry", "Expired")], a=["2.2.2.2"])
     old["generated_at"], new["generated_at"] = "2026-01-01T00:00:00+00:00", "2026-02-01T00:00:00+00:00"
 
     result = diff_reports(old, new)
@@ -134,16 +134,16 @@ def test_diff_unchanged():
 
 
 def test_diff_sees_through_mute():
-    """Un empeoramiento silenciado sigue apareciendo en el diff."""
+    """A muted regression still shows up in the diff."""
     old = _report([finding("ok", "hdr.hsts", "max-age=...")])
-    new = _report([finding("fail", "hdr.hsts", "Sin HSTS")])
+    new = _report([finding("fail", "hdr.hsts", "No HSTS")])
     apply_mutes(new, {"hdr.hsts": "Pages"})
     changed = diff_reports(old, new)["findings"]["changed"]
     assert changed[0]["to"] == "fail"
 
 
 def test_record_reordering_is_not_a_diff():
-    """El resolver rota el RRset; eso no es un cambio real."""
+    """The resolver rotates the RRset. That is not a real change."""
     old = _report([], a=["185.199.108.153", "185.199.111.153"])
     new = _report([], a=["185.199.111.153", "185.199.108.153"])
     assert diff_reports(old, new)["records"] == {}
@@ -152,16 +152,16 @@ def test_record_reordering_is_not_a_diff():
 @pytest.mark.parametrize(
     "lifetime,days_left,expected",
     [
-        # Certificado ACME de 90 días: 38 días restantes es una renovación sana,
-        # no un aviso. Con el umbral fijo de 45 esto salía en amarillo siempre.
+        # A 90 day ACME certificate with 38 days left is healthy renewal, not a
+        # warning. With the old fixed 45 day threshold this was always yellow.
         (90, 38, "ok"),
         (90, 12, "warn"),
         (90, 5, "fail"),
-        # Certificado anual: se mantienen los umbrales clásicos.
+        # Yearly certificate keeps the classic thresholds.
         (398, 60, "ok"),
         (398, 30, "warn"),
         (398, 15, "fail"),
-        # Certificado corto de 47 días.
+        # Short 47 day certificate.
         (47, 20, "ok"),
         (47, 5, "warn"),
         (47, 2, "fail"),
@@ -185,7 +185,7 @@ def test_expiry_thresholds_are_ordered():
 
 
 def test_hostnames_are_lowercased():
-    """FrancisRavn.github.io y francisravn.github.io son el mismo registro."""
+    """Example.GitHub.io and example.github.io are the same record."""
     assert _sorted_records("CNAME", ["FrancisRavn.github.io"]) == ["francisravn.github.io"]
     assert _sorted_records("NS", ["NS1.Example.COM"]) == ["ns1.example.com"]
 
@@ -193,7 +193,7 @@ def test_hostnames_are_lowercased():
 def test_capitalization_change_is_not_a_diff():
     old = _report([], www_cname=["FrancisRavn.github.io"])
     new = _report([], www_cname=["francisravn.github.io"])
-    # El valor ya llega normalizado desde _sorted_records; el diff no debe verlo.
+    # The value arrives normalized from _sorted_records, so the diff must not see it.
     old["dns"]["www_cname"] = _sorted_records("CNAME", old["dns"]["www_cname"])
     new["dns"]["www_cname"] = _sorted_records("CNAME", new["dns"]["www_cname"])
     assert diff_reports(old, new)["records"] == {}

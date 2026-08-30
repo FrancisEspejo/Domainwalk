@@ -25,20 +25,30 @@ SECURITY_HEADERS = (
 
 HEADER_FIXES = {
     "hdr.hsts": "Strict-Transport-Security: max-age=63072000; includeSubDomains",
-    "hdr.csp": "Content-Security-Policy: default-src 'self'; frame-ancestors 'none' (y ajusta desde ahí)",
+    "hdr.csp": "Content-Security-Policy: default-src 'self'; frame-ancestors 'none' (tighten from there)",
     "hdr.xcto": "X-Content-Type-Options: nosniff",
-    "hdr.frame": "Content-Security-Policy: frame-ancestors 'none' (o X-Frame-Options: DENY)",
+    "hdr.frame": "Content-Security-Policy: frame-ancestors 'none' (or X-Frame-Options: DENY)",
     "hdr.referrer": "Referrer-Policy: strict-origin-when-cross-origin",
 }
 
-SKIP_MSG = "No evaluado: el certificado no valida"
+SKIP_MSG = "Not evaluated, the certificate does not validate"
+
+# OIDs mapped to the labels getpeercert() uses.
+ATTR_NAMES = {
+    "2.5.4.3": "commonName",
+    "2.5.4.10": "organizationName",
+    "2.5.4.11": "organizationalUnitName",
+    "2.5.4.6": "countryName",
+    "2.5.4.8": "stateOrProvinceName",
+    "2.5.4.7": "localityName",
+}
 
 
 class _NoRedirect(HTTPRedirectHandler):
-    """Deja que la redirección salga como HTTPError en vez de seguirla.
+    """Let the redirect surface as an HTTPError instead of following it.
 
-    Sin esto, urlopen sigue el 301 y un fallo de TLS en el destino se reporta
-    como 'HTTP no contestó', que es falso: el puerto 80 contestó perfectamente.
+    Without this, urlopen follows the 301 and a TLS failure at the destination
+    gets reported as "port 80 did not answer", which is false. Port 80 answered.
     """
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -57,15 +67,51 @@ def _fetch(url: str, timeout: float, method: str = "GET") -> tuple[int, dict[str
         return int(exc.code), headers, body
 
 
-def _decode_der(der: bytes | None) -> dict:
-    """Decodifica un certificado DER sin pasar por la validación de OpenSSL.
+# cryptography is the preferred path. Without it we fall back to a private
+# CPython API that works today but carries no stability guarantee.
+try:
+    from cryptography import x509
+    from cryptography.hazmat.primitives.serialization import Encoding  # noqa: F401
 
-    ssl._ssl._test_decode_cert es API privada de CPython (estable en 3.11-3.13
-    pero sin garantías). Si prefieres algo firme, sustituye esta función por
-    cryptography.x509.load_der_x509_certificate.
+    HAS_CRYPTOGRAPHY = True
+except ImportError:  # pragma: no cover
+    HAS_CRYPTOGRAPHY = False
+
+
+def _decode_der_cryptography(der: bytes) -> dict:
+    """Decode the DER with cryptography and return getpeercert()'s shape."""
+    cert = x509.load_der_x509_certificate(der)
+
+    def names(source) -> tuple:
+        out = []
+        for attr in source:
+            label = ATTR_NAMES.get(attr.oid.dotted_string)
+            if label:
+                out.append(((label, attr.value),))
+        return tuple(out)
+
+    try:
+        sans = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
+        dns_names = tuple(("DNS", name) for name in sans.value.get_values_for_type(x509.DNSName))
+    except x509.ExtensionNotFound:
+        dns_names = ()
+
+    # Store datetimes instead of OpenSSL's string. _cert_time accepts both.
+    return {
+        "subject": names(cert.subject),
+        "issuer": names(cert.issuer),
+        "notBefore": getattr(cert, "not_valid_before_utc", None) or cert.not_valid_before,
+        "notAfter": getattr(cert, "not_valid_after_utc", None) or cert.not_valid_after,
+        "subjectAltName": dns_names,
+    }
+
+
+def _decode_der_stdlib(der: bytes) -> dict:
+    """Dependency free fallback using ssl._ssl._test_decode_cert.
+
+    Private CPython API. Stable on 3.11 to 3.13, no promises for 3.14.
+    Install the `crypto` extra to avoid relying on this.
     """
-    if not der:
-        return {}
     pem = ssl.DER_cert_to_PEM_cert(der)
     fd, path = tempfile.mkstemp(suffix=".pem")
     try:
@@ -81,6 +127,17 @@ def _decode_der(der: bytes | None) -> dict:
             pass
 
 
+def _decode_der(der: bytes | None) -> dict:
+    if not der:
+        return {}
+    if HAS_CRYPTOGRAPHY:
+        try:
+            return _decode_der_cryptography(der)
+        except Exception:  # noqa: BLE001, fall back to the stdlib path
+            pass
+    return _decode_der_stdlib(der)
+
+
 def _peer_cert(host: str, port: int, timeout: float, verify: bool) -> tuple[dict, str | None, tuple | None]:
     ctx = ssl.create_default_context()
     if not verify:
@@ -91,7 +148,7 @@ def _peer_cert(host: str, port: int, timeout: float, verify: bool) -> tuple[dict
             if verify:
                 cert = ssock.getpeercert() or {}
             else:
-                # Con CERT_NONE, getpeercert() devuelve {}: hay que ir al DER.
+                # With CERT_NONE, getpeercert() returns {}, so go to the DER.
                 cert = _decode_der(ssock.getpeercert(binary_form=True))
             return cert, ssock.version(), ssock.cipher()
 
@@ -100,19 +157,21 @@ def _cert_time(cert: dict, key: str) -> datetime | None:
     raw = cert.get(key)
     if not raw:
         return None
+    if isinstance(raw, datetime):
+        return raw if raw.tzinfo else raw.replace(tzinfo=timezone.utc)
     try:
-        # cert_time_to_seconds lleva los meses en una tupla: no depende del locale.
+        # cert_time_to_seconds hardcodes month names, so it ignores the locale.
         return datetime.fromtimestamp(ssl.cert_time_to_seconds(raw), timezone.utc)
     except ValueError:
         return None
 
 
 def expiry_thresholds(lifetime_days: int | None) -> tuple[int, int]:
-    """Devuelve (fail_at, warn_at) en días, en proporción a la vida del certificado.
+    """Return (fail_at, warn_at) in days, scaled to the certificate lifetime.
 
-    Un umbral fijo de 45 días marca en amarillo cualquier certificado ACME de 90
-    días sano, porque su renovación normal pasa por ahí cada ciclo. Se escala con
-    la duración y se limita a los valores clásicos para certificados anuales.
+    A fixed 45 day threshold flags every healthy 90 day ACME certificate, since
+    normal renewal passes through that window on every cycle. This scales with
+    the duration and caps at the classic values for yearly certificates.
     """
     if not lifetime_days or lifetime_days <= 0:
         return 21, 45
@@ -146,19 +205,19 @@ def collect_tls(host: str, timeout: float, port: int = 443) -> dict:
             finding(
                 "fail",
                 "tls.verify",
-                f"Cadena no válida: {info['verify_error']}",
-                "Sirve la cadena completa (hoja + intermedios) y comprueba que el nombre coincide.",
+                f"Invalid chain: {info['verify_error']}",
+                "Serve the full chain (leaf plus intermediates) and check the hostname matches.",
             )
         )
         try:
-            # Segunda pasada sin verificar, solo para poder diagnosticar el porqué.
+            # Second pass without verification, only to diagnose the reason.
             cert, version, cipher = _peer_cert(host, port, timeout, verify=False)
         except (OSError, ssl.SSLError) as exc2:
             findings.append(finding("fail", "tls.connect", str(exc2)))
             info["findings"] = findings
             return info
     except (OSError, ssl.SSLError) as exc:
-        findings.append(finding("fail", "tls.connect", str(exc), "Comprueba que el puerto 443 está abierto y sirve TLS."))
+        findings.append(finding("fail", "tls.connect", str(exc), "Check that port 443 is open and serving TLS."))
         info["findings"] = findings
         return info
 
@@ -186,18 +245,18 @@ def collect_tls(host: str, timeout: float, port: int = 443) -> dict:
         }
     )
 
-    renew = "Revisa la renovación automática (certbot/ACME) y renueva antes de 30 días."
+    renew = "Check your automatic renewal (certbot or ACME) and renew well before expiry."
     if days is None:
-        findings.append(finding("fail", "tls.expiry", "No se leyó la caducidad"))
+        findings.append(finding("fail", "tls.expiry", "Could not read the expiry date"))
     elif days < 0:
-        findings.append(finding("fail", "tls.expiry", f"Caducado hace {-days} días ({info['not_after']})", renew))
+        findings.append(finding("fail", "tls.expiry", f"Expired {-days} days ago ({info['not_after']})", renew))
     elif days < fail_at:
-        findings.append(finding("fail", "tls.expiry", f"Caduca en {days} días (umbral {fail_at})", renew))
+        findings.append(finding("fail", "tls.expiry", f"Expires in {days} days (threshold {fail_at})", renew))
     elif days < warn_at:
-        findings.append(finding("warn", "tls.expiry", f"Caduca en {days} días (umbral {warn_at})", renew))
+        findings.append(finding("warn", "tls.expiry", f"Expires in {days} days (threshold {warn_at})", renew))
     else:
-        suffix = f" · vida {lifetime}d" if lifetime else ""
-        findings.append(finding("ok", "tls.expiry", f"Caduca en {days} días ({info['not_after']}){suffix}"))
+        suffix = f" - {lifetime}d lifetime" if lifetime else ""
+        findings.append(finding("ok", "tls.expiry", f"Expires in {days} days ({info['not_after']}){suffix}"))
 
     if sans:
         covers_host = host_matches(host, sans)
@@ -207,40 +266,40 @@ def collect_tls(host: str, timeout: float, port: int = 443) -> dict:
                 finding(
                     "fail",
                     "tls.san",
-                    f"El certificado no cubre {host}: {', '.join(sans[:6])}",
-                    f"Reemite el certificado incluyendo {host} en el SAN.",
+                    f"The certificate does not cover {host}. It covers {', '.join(sans[:6])}",
+                    f"Reissue the certificate with {host} in the SAN.",
                 )
             )
         elif not covers_www:
             findings.append(
-                finding("info", "tls.san", f"Cubre {host} pero no www.{host}", f"Añade www.{host} al SAN si ese host se usa.")
+                finding("info", "tls.san", f"Covers {host} but not www.{host}", f"Add www.{host} to the SAN if that host is used.")
             )
         else:
             findings.append(finding("ok", "tls.san", ", ".join(sans[:6])))
 
     ver = info.get("tls_version") or ""
     if ver in {"TLSv1", "TLSv1.1"}:
-        findings.append(finding("fail", "tls.version", ver, "Desactiva TLS 1.0/1.1 y deja TLS 1.2 como mínimo."))
+        findings.append(finding("fail", "tls.version", ver, "Disable TLS 1.0 and 1.1, keep TLS 1.2 as the minimum."))
     else:
-        findings.append(finding("ok", "tls.version", ver or "desconocida"))
+        findings.append(finding("ok", "tls.version", ver or "unknown"))
 
     info["findings"] = findings
     return info
 
 
 def _check_plain_http(domain: str, timeout: float) -> tuple[dict, dict]:
-    """Mira el puerto 80 sin seguir redirecciones."""
+    """Check port 80 without following redirects."""
     result: dict = {}
     opener = build_opener(_NoRedirect)
     req = Request(f"http://{domain}/", method="GET", headers={"User-Agent": USER_AGENT})
-    redirect_fix = "Devuelve un 301 desde http:// hacia la misma ruta en https://."
+    redirect_fix = "Return a 301 from http:// to the same path on https://."
     try:
         with opener.open(req, timeout=timeout) as resp:
             result["http_status"] = int(resp.status)
             return result, finding(
                 "fail",
                 "http.redirect",
-                f"HTTP {resp.status} sin redirigir a HTTPS",
+                f"HTTP {resp.status} with no redirect to HTTPS",
                 redirect_fix,
             )
     except HTTPError as exc:
@@ -248,13 +307,13 @@ def _check_plain_http(domain: str, timeout: float) -> tuple[dict, dict]:
         result["http_status"] = int(exc.code)
         result["redirected_from_http"] = loc
         if loc and loc.startswith("https://"):
-            return result, finding("ok", "http.redirect", f"HTTP {exc.code} → {loc}")
+            return result, finding("ok", "http.redirect", f"HTTP {exc.code} -> {loc}")
         if 300 <= exc.code < 400:
-            return result, finding("fail", "http.redirect", f"HTTP {exc.code} → {loc or '?'} (no es https)", redirect_fix)
+            return result, finding("fail", "http.redirect", f"HTTP {exc.code} -> {loc or '?'} (not https)", redirect_fix)
         return result, finding("warn", "http.redirect", f"HTTP {exc.code}")
     except (URLError, OSError) as exc:
         reason = getattr(exc, "reason", exc)
-        return result, finding("warn", "http.redirect", f"El puerto 80 no contestó ({reason})")
+        return result, finding("warn", "http.redirect", f"Port 80 did not answer ({reason})")
 
 
 def collect_http(domain: str, timeout: float, tls_ok: bool = True) -> dict:
@@ -267,8 +326,8 @@ def collect_http(domain: str, timeout: float, tls_ok: bool = True) -> dict:
     findings.append(redirect_finding)
 
     if not tls_ok:
-        # Sin TLS válido, cada petición HTTPS repetiría el mismo error. Un
-        # problema, una línea.
+        # Without valid TLS every HTTPS request repeats the same error.
+        # One problem, one line.
         result["skipped"] = True
         findings.append(finding("info", "https.skipped", SKIP_MSG))
         result["findings"] = findings
@@ -292,29 +351,29 @@ def collect_http(domain: str, timeout: float, tls_ok: bool = True) -> dict:
     if hsts:
         findings.append(finding("ok", "hdr.hsts", hsts))
     else:
-        findings.append(finding("fail", "hdr.hsts", "Sin Strict-Transport-Security", HEADER_FIXES["hdr.hsts"]))
+        findings.append(finding("fail", "hdr.hsts", "No Strict-Transport-Security", HEADER_FIXES["hdr.hsts"]))
 
     csp = headers.get("content-security-policy", "")
     if csp:
         findings.append(finding("ok", "hdr.csp", csp[:180]))
     else:
-        findings.append(finding("warn", "hdr.csp", "Sin Content-Security-Policy", HEADER_FIXES["hdr.csp"]))
+        findings.append(finding("warn", "hdr.csp", "No Content-Security-Policy", HEADER_FIXES["hdr.csp"]))
 
     xcto = headers.get("x-content-type-options", "")
     if xcto.lower() == "nosniff":
         findings.append(finding("ok", "hdr.xcto", xcto))
     else:
-        findings.append(finding("warn", "hdr.xcto", "Sin X-Content-Type-Options: nosniff", HEADER_FIXES["hdr.xcto"]))
+        findings.append(finding("warn", "hdr.xcto", "No X-Content-Type-Options: nosniff", HEADER_FIXES["hdr.xcto"]))
 
     if headers.get("x-frame-options") or "frame-ancestors" in csp.lower():
         findings.append(finding("ok", "hdr.frame", headers.get("x-frame-options") or "CSP frame-ancestors"))
     else:
-        findings.append(finding("warn", "hdr.frame", "Sin X-Frame-Options ni CSP frame-ancestors", HEADER_FIXES["hdr.frame"]))
+        findings.append(finding("warn", "hdr.frame", "No X-Frame-Options and no CSP frame-ancestors", HEADER_FIXES["hdr.frame"]))
 
     if headers.get("referrer-policy"):
         findings.append(finding("ok", "hdr.referrer", headers["referrer-policy"]))
     else:
-        findings.append(finding("warn", "hdr.referrer", "Sin Referrer-Policy", HEADER_FIXES["hdr.referrer"]))
+        findings.append(finding("warn", "hdr.referrer", "No Referrer-Policy", HEADER_FIXES["hdr.referrer"]))
 
     result["findings"] = findings
     return result
@@ -346,15 +405,15 @@ def collect_well_known(domain: str, timeout: float, tls_ok: bool = True) -> dict
                         finding(
                             "warn",
                             "wk.security_txt",
-                            f"{url} → {status}",
-                            "Publica /.well-known/security.txt con las líneas Contact: y Expires:.",
+                            f"{url} -> {status}",
+                            "Publish /.well-known/security.txt with Contact: and Expires: lines.",
                         )
                     )
-            # Un sitio sin robots.txt no tiene un problema: es informativo.
+            # A site with no robots.txt does not have a problem. This is informational.
             elif status == 200:
                 findings.append(finding("ok", "wk.robots_txt", url))
             else:
-                findings.append(finding("info", "wk.robots_txt", f"{url} → {status}"))
+                findings.append(finding("info", "wk.robots_txt", f"{url} -> {status}"))
         except (URLError, OSError, ssl.SSLError) as exc:
             reason = str(getattr(exc, "reason", exc))
             out[key] = {"url": url, "status": None, "error": reason}

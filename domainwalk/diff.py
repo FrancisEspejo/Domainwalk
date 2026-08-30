@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from domainwalk.findings import ORDER, flatten_findings
 
-# Campos de DNS que se comparan como conjuntos.
+# DNS fields compared as sets.
 RECORD_FIELDS = ("a", "aaaa", "mx", "ns", "caa", "ds", "spf", "dmarc", "txt", "www", "www_cname")
 
 
@@ -11,7 +11,7 @@ def _by_id(report: dict) -> dict[str, dict]:
 
 
 def _effective(item: dict) -> str:
-    """Nivel antes de silenciar: un empeoramiento silenciado sigue siendo noticia."""
+    """Level before muting. A muted regression is still news."""
     return item.get("original_level", item["level"])
 
 

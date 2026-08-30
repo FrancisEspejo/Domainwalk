@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-# Orden de severidad, de más grave a menos. Se usa para ordenar la tabla
-# y para decidir el grade global. "info" nunca empeora el grade.
+# Severity order, worst first. Used to sort the table and to decide the overall
+# grade. "info" never makes the grade worse.
 ORDER = ("fail", "warn", "info", "ok")
 LEVELS = frozenset(ORDER)
 
@@ -9,7 +9,7 @@ SECTIONS = ("dns", "tls", "http", "well_known")
 
 
 def finding(level: str, id: str, msg: str, fix: str | None = None) -> dict:
-    """Crea un hallazgo. `fix` es la acción concreta para cerrarlo."""
+    """Build a finding. `fix` is the concrete action that closes it."""
     if level not in LEVELS:
         raise ValueError(f"nivel desconocido: {level!r}")
     item = {"level": level, "id": id, "msg": msg}
@@ -26,7 +26,7 @@ def flatten_findings(report: dict) -> list[dict]:
 
 
 def sort_findings(findings: list[dict]) -> list[dict]:
-    """fail → warn → info → ok, y dentro de cada nivel por id."""
+    """fail, warn, info, ok. Within each level, sorted by id."""
     return sorted(findings, key=lambda f: (ORDER.index(f["level"]), f["id"]))
 
 

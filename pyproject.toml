@@ -1,16 +1,39 @@
 [project]
 name = "domainwalk"
-version = "0.2.1"
-description = "Auditor de superficie pública: DNS, correo, TLS y cabeceras HTTP"
+version = "0.2.2"
+description = "CLI que audita la superficie pública de un dominio: DNS, DNSSEC, SPF/DKIM/DMARC, TLS y cabeceras HTTP"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = [
+  "dns", "dnssec", "spf", "dkim", "dmarc", "tls", "ssl", "certificate",
+  "security-headers", "caa", "security-txt", "domain", "audit", "cli",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: System Administrators",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Internet :: Name Service (DNS)",
+  "Topic :: Security",
+  "Topic :: System :: Systems Administration",
+]
 dependencies = [
   "dnspython>=2.6.1",
   "rich>=13.7.1",
 ]
 
+[project.urls]
+Homepage = "https://github.com/FrancisRavn/domainwalk"
+Issues = "https://github.com/FrancisRavn/domainwalk/issues"
+
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+# Evita depender de ssl._ssl._test_decode_cert, que es API privada de CPython.
+crypto = ["cryptography>=42"]
+dev = ["pytest>=8.0", "cryptography>=42"]
 
 [project.scripts]
 domainwalk = "domainwalk.cli:main"

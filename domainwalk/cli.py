@@ -31,25 +31,25 @@ def normalize_domain(raw: str) -> str:
         elif host.count(":") == 1:  # host:puerto
             host = host.split(":", 1)[0]
     if not host:
-        raise ValueError("dominio vacío")
+        raise ValueError("empty domain")
     host = host.lower().rstrip(".")
     try:
         host = host.encode("idna").decode("ascii")
     except UnicodeError as exc:
-        raise ValueError(f"dominio no válido: {exc}") from exc
+        raise ValueError(f"invalid domain: {exc}") from exc
     return host
 
 
 def run(domain: str, timeout: float) -> dict:
-    # Primera oleada: DNS y TLS no dependen de nada.
+    # First wave. DNS and TLS depend on nothing.
     with ThreadPoolExecutor(max_workers=2) as pool:
         f_dns = pool.submit(collect_dns, domain, timeout)
         f_tls = pool.submit(collect_tls, domain, timeout)
         dns_result = f_dns.result()
         tls_result = f_tls.result()
 
-    # Segunda oleada: si TLS no verifica, HTTP y well-known se marcan como no
-    # evaluados en vez de repetir el mismo error de OpenSSL cuatro veces.
+    # Second wave. If TLS does not verify, HTTP and well-known are marked as not
+    # evaluated instead of repeating the same OpenSSL error four times.
     tls_ok = tls_result.get("verified") is True
     with ThreadPoolExecutor(max_workers=2) as pool:
         f_http = pool.submit(collect_http, domain, timeout, tls_ok)
@@ -74,16 +74,16 @@ def run(domain: str, timeout: float) -> dict:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="domainwalk",
-        description="Auditor de superficie pública (DNS, correo, TLS, cabeceras).",
+        description="Public surface auditor for a domain (DNS, mail, TLS, headers).",
     )
-    parser.add_argument("domain", help="dominio a auditar, p.ej. francisravn.com")
-    parser.add_argument("--json", action="store_true", help="salida JSON")
-    parser.add_argument("-o", "--output", help="escribe el JSON en un archivo")
-    parser.add_argument("--diff", metavar="INFORME.json", help="compara esta ejecución con un informe anterior")
-    parser.add_argument("--diff-output", metavar="DIFF.json", help="escribe el resultado de la comparación en un archivo")
-    parser.add_argument("--timeout", type=float, default=None, help="timeout en segundos (def. 8)")
-    parser.add_argument("--config", help=f"ruta a la configuración (def. ./.domainwalk.toml)")
-    parser.add_argument("--no-config", action="store_true", help="ignora cualquier configuración")
+    parser.add_argument("domain", help="domain to audit, e.g. example.com")
+    parser.add_argument("--json", action="store_true", help="JSON output")
+    parser.add_argument("-o", "--output", help="write the report as JSON to a file")
+    parser.add_argument("--diff", metavar="INFORME.json", help="compare this run against a previous report")
+    parser.add_argument("--diff-output", metavar="DIFF.json", help="write the comparison result to a file")
+    parser.add_argument("--timeout", type=float, default=None, help="timeout in seconds (default 8)")
+    parser.add_argument("--config", help="path to the config file (default ./.domainwalk.toml)")
+    parser.add_argument("--no-config", action="store_true", help="ignore any config file")
     parser.add_argument("--version", action="version", version=f"domainwalk {__version__}")
     return parser
 
@@ -111,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
             with open(args.diff, encoding="utf-8") as fh:
                 previous = json.load(fh)
         except (OSError, json.JSONDecodeError) as exc:
-            print(f"error: no se pudo leer {args.diff}: {exc}", file=sys.stderr)
+            print(f"error: could not read {args.diff}: {exc}", file=sys.stderr)
             return EXIT_ERROR
 
     try:
@@ -119,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
     except DomainNotResolved as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_ERROR
-    except Exception as exc:  # noqa: BLE001 — frontera del CLI
+    except Exception as exc:  # noqa: BLE001, CLI boundary
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_ERROR
 
@@ -133,16 +133,16 @@ def main(argv: list[str] | None = None) -> int:
                 fh.write(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
             return True
         except OSError as exc:
-            print(f"error: no se pudo escribir {path}: {exc}", file=sys.stderr)
+            print(f"error: could not write {path}: {exc}", file=sys.stderr)
             return False
 
-    # -o guarda el informe a secas, nunca el informe envuelto con su diff: así el
-    # archivo de hoy sirve de línea base para la comparación de mañana.
+    # -o writes the plain report, never the report wrapped with its diff, so
+    # today's file works as the baseline for tomorrow's comparison.
     if args.output and not dump(args.output, report):
         return EXIT_ERROR
     if args.diff_output:
         if delta is None:
-            print("error: --diff-output requiere --diff", file=sys.stderr)
+            print("error: --diff-output requires --diff", file=sys.stderr)
             return EXIT_ERROR
         if not dump(args.diff_output, delta):
             return EXIT_ERROR

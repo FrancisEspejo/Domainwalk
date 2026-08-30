@@ -22,7 +22,7 @@ def find_config(explicit: str | None = None, cwd: Path | None = None) -> Path | 
     if explicit:
         path = Path(explicit)
         if not path.is_file():
-            raise FileNotFoundError(f"no existe el archivo de configuración: {path}")
+            raise FileNotFoundError(f"config file not found: {path}")
         return path
     local = (cwd or Path.cwd()) / CONFIG_NAME
     if local.is_file():
@@ -44,7 +44,7 @@ def load_config(explicit: str | None = None, cwd: Path | None = None) -> Config:
 
 
 def mute_reason(finding_id: str, mute: dict[str, str]) -> str | None:
-    """Coincidencia exacta o por patrón (hdr.* silencia todas las cabeceras)."""
+    """Exact match or pattern match, so hdr.* mutes every header check."""
     if finding_id in mute:
         return mute[finding_id]
     for pattern, reason in mute.items():
@@ -54,10 +54,10 @@ def mute_reason(finding_id: str, mute: dict[str, str]) -> str | None:
 
 
 def apply_mutes(report: dict, mute: dict[str, str]) -> dict:
-    """Baja a info los hallazgos silenciados y recalcula el resumen.
+    """Drop muted findings to info and recompute the summary.
 
-    Se guarda el nivel original para que el diff siga viendo un empeoramiento
-    aunque el hallazgo esté silenciado.
+    The original level is kept so the diff still sees a regression even when the
+    finding is muted.
     """
     if not mute:
         return report
