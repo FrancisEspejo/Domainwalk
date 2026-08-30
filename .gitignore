@@ -4,3 +4,7 @@ __pycache__/
 informes/
 .domainwalk.toml
 baseline.json
+dist/
+build/
+*.save
+*.zip
