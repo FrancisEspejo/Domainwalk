@@ -1,7 +1,7 @@
 [project]
 name = "domainwalk"
-version = "0.3.0"
-description = "CLI que audita la superficie pública de un dominio: DNS, DNSSEC, SPF/DKIM/DMARC, TLS y cabeceras HTTP"
+version = "0.3.1"
+description = "Audit the public surface of a domain: DNS, DNSSEC, SPF/DKIM/DMARC, TLS and HTTP security headers"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"

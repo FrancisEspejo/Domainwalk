@@ -1,18 +1,13 @@
 # domainwalk
 
 ![tests](https://github.com/FrancisRavn/Domainwalk/actions/workflows/tests.yml/badge.svg)
-[![PyPI](https://img.shields.io/pypi/v/domainwalk)](https://pypi.org/project/domainwalk/)
 ![python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 
-Audit the public surface of a domain and see what is set up correctly and what is
-not. DNS records, DNSSEC, SPF, DKIM, DMARC, TLS certificates, HTTP security
-headers, `security.txt` and `robots.txt`, in a single pass and a single report.
-
-```bash
-pip install "domainwalk[crypto]"
-domainwalk example.com
-```
+A command line tool that audits the public surface of a domain and tells you what
+is set up correctly and what is not. DNS records, DNSSEC, SPF, DKIM, DMARC, TLS
+certificates, HTTP security headers, `security.txt` and `robots.txt`, in a single
+pass and a single report.
 
 Point it at a domain and you get a graded list of findings. Green for what is
 fine, yellow and red for what is not, and for every problem the exact line you
@@ -22,63 +17,6 @@ Everything domainwalk reads is already public. Anyone can query your DNS. Your T
 certificate goes to whoever connects. Your response headers ship with every page.
 It is a passive audit of visible configuration, which is why you can run it
 against your own domain or against one you are just checking out.
-
-## Install
-
-Python 3.11 or newer.
-
-```bash
-pip install "domainwalk[crypto]"
-```
-
-If your system blocks that with `externally-managed-environment`, which happens on
-Debian, Ubuntu and recent Fedora, you have two clean options.
-
-**pipx**, recommended for a command line tool. It creates an isolated environment
-for you and puts `domainwalk` on your PATH.
-
-```bash
-sudo apt install pipx        # or: brew install pipx
-pipx install "domainwalk[crypto]"
-```
-
-**A virtualenv**, if you prefer to manage it yourself.
-
-```bash
-sudo apt install python3-venv    # Debian and Ubuntu only
-python3 -m venv .venv
-source .venv/bin/activate
-pip install "domainwalk[crypto]"
-```
-
-Check it landed.
-
-```bash
-domainwalk --version
-domainwalk example.com
-```
-
-### Why the `[crypto]` extra
-
-`pip install domainwalk` works too, with `dnspython` and `rich` as the only
-dependencies. The extra adds `cryptography`, which is used to read certificates
-that OpenSSL rejects. Without it that path falls back to a private CPython API
-that works today but carries no stability promise. Both produce identical
-results, and a test enforces that, so the extra is about durability rather than
-features.
-
-### From source
-
-For hacking on it, or to run the tests.
-
-```bash
-git clone https://github.com/FrancisRavn/Domainwalk.git
-cd Domainwalk
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-pytest
-```
 
 ## What it checks
 
@@ -145,6 +83,54 @@ When TLS fails to verify, every HTTPS request would fail with the same error, so
 those checks come back marked as not evaluated. One problem, one line, instead of
 the same OpenSSL message copied across four findings.
 
+## What makes the report usable
+
+**It hands you the fix.** "Missing Referrer-Policy" sends you to a search engine.
+`Referrer-Policy: strict-origin-when-cross-origin` is a line you paste into a
+config. Every actionable finding carries the literal value or the concrete step.
+
+**It knows a fact from a problem.** A domain with no `MX` is not broken, it just
+does not receive mail. A missing `robots.txt` is not a security issue. Those are
+`info` and they never drag the grade down, so a well configured domain comes back
+clean. That is what makes the red mean something when it shows up.
+
+**It explains the failure instead of reporting it.** The certificate that OpenSSL
+rejects is the clearest case. Knowing that a handshake failed is nearly useless.
+Knowing it expired 4,157 days ago and was issued by COMODO tells you the whole
+story.
+
+**It is honest about scope.** domainwalk is not a vulnerability scanner, a port
+scanner or a fuzzer. It does not read code, audit dependencies or hunt CVEs, and
+it never sends a single request that a browser would not send. It checks
+configuration, meaning things you fix by publishing a DNS record or adding a line
+to a server config.
+
+## Install
+
+Python 3.11 or newer. On Debian and Ubuntu, install `python3-venv` first, since
+those distros ship it separately and block `pip` outside a virtualenv.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install "domainwalk[crypto]"
+```
+
+Or from a clone, which is what you want if you plan to change anything.
+
+```bash
+git clone https://github.com/FrancisRavn/Domainwalk.git
+cd Domainwalk
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[crypto]"
+```
+
+Two runtime dependencies, `dnspython` and `rich`. The `crypto` extra pulls in
+`cryptography` and is recommended. Without it, reading a certificate that OpenSSL
+rejected falls back to a private CPython API that works today but carries no
+stability promise.
+
 ## Usage
 
 ```bash
@@ -161,7 +147,7 @@ internationalized name like `dominó.es`, which becomes `xn--domin-4ta.es`.
 Every run makes real DNS queries and real HTTP requests against the domain you
 pass. Nothing else, and nothing an ordinary browser would not do.
 
-### A domain that is in good shape
+### Sample output
 
 ```
 domainwalk  cloudflare.com  OK
@@ -187,10 +173,7 @@ OK      wk.robots_txt    https://cloudflare.com/robots.txt
 OK      wk.security_txt  https://cloudflare.com/.well-known/security.txt
 ```
 
-A well configured domain comes back clean, because facts never count as problems.
-That is what makes the red mean something when it does show up.
-
-### A domain with work to do
+And a domain with problems, where the *How to fix* section does the real work.
 
 ```
 domainwalk  example.com  FAIL
@@ -215,10 +198,7 @@ How to fix
   wk.security_txt  Publish /.well-known/security.txt with Contact: and Expires: lines.
 ```
 
-The *How to fix* section is the point. "Missing Referrer-Policy" sends you to a
-search engine. The literal header value is something you paste into a config.
-
-### A broken certificate
+Broken TLS is worth seeing too.
 
 ```
 domainwalk  expired.badssl.com  FAIL
@@ -231,20 +211,19 @@ INFO    wk.skipped     Not evaluated, the certificate does not validate
 OK      http.redirect  HTTP 301 -> https://expired.badssl.com/
 ```
 
-Knowing that a handshake failed is nearly useless. Knowing the certificate expired
-4,157 days ago and who issued it is the whole story. Note that `http.redirect` is
-still green, because port 80 answered correctly. The failure is on the HTTPS side.
+### Comparing two runs
 
-## Comparing two runs
-
-Save a report now, compare against it later. Useful while you are fixing a domain
-and want to confirm what actually moved, or when you revisit one you audited
+Save a report now, compare against it later. Useful when you are fixing a domain
+and want to confirm what actually moved, or when you revisit a domain you audited
 months ago.
 
 ```bash
 domainwalk example.com -o audits/example-2026-08.json
 domainwalk example.com --diff audits/example-2026-08.json
 ```
+
+The comparison flags severity changes as regressions or improvements, findings
+that appeared or disappeared, and DNS records added or removed.
 
 ```
 domainwalk diff  example.com
@@ -259,24 +238,17 @@ DNS records
   - dmarc  v=DMARC1; p=quarantine
 ```
 
-The comparison works on severity levels, not text, so a certificate renewal that
-leaves `tls.expiry` green produces nothing while a DMARC policy dropping from
-`reject` to `none` shows up as a regression.
-
 Output is deterministic. Record lists are sorted and hostnames normalized, so the
-RRset rotation your resolver performs on every query never appears as a fake
-change. `-o` always writes the plain report, even alongside `--diff`, so any saved
-report works as a baseline later. The comparison itself goes to `--diff-output`,
-or to stdout with `--json`.
+RRset rotation your resolver performs on every query never shows up as a fake
+change. `-o` always writes the plain report, even alongside `--diff`, so any
+saved report works as a baseline later. The comparison itself goes to
+`--diff-output`, or to stdout with `--json`.
 
-## Muting findings you cannot fix
+### Muting findings you cannot fix
 
 Some findings are real but unfixable in a given setup. You cannot set custom
-response headers on GitHub Pages, for example, and a red flag you can never clear
-is noise you learn to ignore.
-
-Drop a `.domainwalk.toml` in the working directory, or in
-`~/.config/domainwalk/config.toml`.
+response headers on GitHub Pages, for example. Drop a `.domainwalk.toml` in the
+working directory, or in `~/.config/domainwalk/config.toml`.
 
 ```toml
 timeout = 8.0
@@ -286,20 +258,9 @@ timeout = 8.0
 ```
 
 Muted findings fall to `INFO`, stop counting toward the grade, and print with
-their reason attached, so months later you know why they are quiet. Patterns work,
-so `hdr.*` covers every header check. Use `--no-config` to ignore configuration
-entirely.
-
-## JSON output
-
-`--json` prints the full report, including everything the terminal view trims.
-Complete header values, all SANs, every TXT record. Finding ids are stable and
-language independent, so they are what a script should key off.
-
-```bash
-domainwalk example.com --json | jq '.summary'
-domainwalk example.com --json | jq '.dns.findings[] | select(.level == "fail")'
-```
+their reason attached, so months later you know why they are quiet. Patterns
+work, so `hdr.*` covers every header check. Use `--no-config` to ignore
+configuration entirely.
 
 ## Exit codes
 
@@ -307,12 +268,16 @@ domainwalk example.com --json | jq '.dns.findings[] | select(.level == "fail")'
 - `1` at least one failure
 - `2` usage error, unreadable config, or the domain does not resolve
 
-## What this is not
+## JSON output
 
-domainwalk is not a vulnerability scanner, a port scanner or a fuzzer. It does not
-read code, audit dependencies or hunt CVEs, and it never sends a request a browser
-would not send. It checks configuration, meaning things you fix by publishing a
-DNS record or adding a line to a server config.
+`--json` prints the full report, including everything the terminal view trims.
+Complete header values, all SANs, every TXT record. Finding ids are stable and
+language independent, so they are what any script should key off.
+
+```bash
+domainwalk example.com --json | jq '.summary'
+domainwalk example.com --json | jq '.dns.findings[] | select(.level == "fail")'
+```
 
 ## Tests
 
@@ -346,10 +311,11 @@ depend on which extras are installed.
 
 ## Contributing
 
-Issues and pull requests are welcome. New checks should follow the existing shape,
-a stable id, a severity that reflects real impact, and a `fix` that tells the user
-exactly what to publish. If a finding cannot be acted on, it is probably `info`.
+Issues and pull requests are welcome. New checks should follow the existing
+shape, a stable id, a severity that reflects real impact, and a `fix` that tells
+the user exactly what to publish. If a finding cannot be acted on, it is probably
+`info`.
 
 ## License
 
-MIT, see [LICENSE](https://github.com/FrancisRavn/Domainwalk/blob/main/LICENSE).
+MIT, see [LICENSE](LICENSE).
